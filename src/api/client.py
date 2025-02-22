@@ -20,7 +20,13 @@ class APIClient:
         self.session: Optional[aiohttp.ClientSession] = None
         self._access_token: Optional[str] = None
         self._rate_limit_remaining: int = 20
-        self._rate_limit_reset: Optional[datetime] = None
+        self._rate_limit_reset: Optional[datetime] = None   
+
+    async def ensure_session(self):
+        """Ensure we have a valid session"""
+        if self.session is None or self.session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)
+            self.session = aiohttp.ClientSession(timeout=timeout)
 
     @property
     def is_authenticated(self) -> bool:
@@ -38,8 +44,11 @@ class APIClient:
 
     async def create_session(self):
         """Create new aiohttp session"""
+        print("Creating new aiohttp session")
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
+            self.session = aiohttp.ClientSession(timeout=timeout)
+            print("Session created successfully")
 
     async def close(self):
         """Close the session"""
@@ -61,6 +70,8 @@ class APIClient:
 
     async def _handle_response(self, response: aiohttp.ClientResponse) -> Any:
         """Handle API response and potential errors"""
+        print(f"Handling response with status: {response.status}")
+        
         # Update rate limit info
         self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
         reset_time = response.headers.get('X-RateLimit-Reset')
@@ -69,8 +80,10 @@ class APIClient:
 
         try:
             data = await response.json()
+            print(f"Response data: {data}")
         except json.JSONDecodeError:
             data = await response.text()
+            print(f"Raw response text: {data}")
 
         if not response.ok:
             raise APIError(
@@ -88,16 +101,41 @@ class APIClient:
         include_auth: bool = True
     ) -> Any:
         """Make HTTP request to API"""
-        if self.session is None or self.session.closed:
-            await self.create_session()
+        await self.ensure_session()
 
-        async with self.session.request(
-            method=method,
-            url=url,
-            json=data,
-            headers=self._get_headers(include_auth)
-        ) as response:
-            return await self._handle_response(response)
+        try:
+            headers = self._get_headers(include_auth)
+            async with self.session.request(
+                method=method,
+                url=url,
+                json=data,
+                headers=headers,
+                ssl=False  # Disable SSL verification for local development
+            ) as response:
+                # Update rate limit info
+                self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
+                reset_time = response.headers.get('X-RateLimit-Reset')
+                if reset_time:
+                    self._rate_limit_reset = datetime.fromtimestamp(int(reset_time))
+
+                try:
+                    data = await response.json()
+                except json.JSONDecodeError:
+                    data = await response.text()
+
+                if not response.ok:
+                    raise APIError(
+                        message=data.get('message', 'Unknown error'),
+                        status_code=response.status
+                    )
+
+                return data
+                
+        except aiohttp.ClientError as e:
+            raise APIError(
+                message=f"Network error: {str(e)}",
+                status_code=0
+            )
 
     async def login(self, email: str, password: str) -> LoginResponse:
         """Log in user and get access token"""
@@ -108,10 +146,13 @@ class APIClient:
 
     async def logout(self):
         """Log out user and clear session"""
-        try:
-            await self._request('POST', self.endpoints.logout)
-        finally:
-            self._access_token = None
+        if self.session and not self.session.closed:
+            try:
+                await self._request('POST', self.endpoints.logout)
+            finally:
+                self._access_token = None
+                await self.session.close()
+                self.session = None
 
     async def register(self, email: str, password: str, invite_code: str):
         """Register new user"""
