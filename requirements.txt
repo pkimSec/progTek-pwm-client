@@ -1,0 +1,32 @@
+# GUI Framework
+PyQt6>=6.6.1
+PyQt6-Qt6>=6.6.1
+PyQt6-sip>=13.6.0
+
+# Networking
+aiohttp>=3.9.1
+yarl>=1.9.4
+multidict>=6.0.4
+
+# Cryptography
+cryptography>=41.0.7
+pyOpenSSL>=23.3.0
+
+# Data Handling
+pydantic>=2.5.3
+python-dateutil>=2.8.2
+
+# Development Tools
+pytest>=7.4.3
+pytest-qt>=4.2.0
+pytest-asyncio>=0.23.2
+pytest-cov>=4.1.0
+black>=23.12.1
+flake8>=6.1.0
+mypy>=1.8.0
+
+# Utilities
+python-dotenv>=1.0.0
+appdirs>=1.4.4
+typing-extensions>=4.9.0
+zxcvbn>=4.4.28  # Password strength estimation
