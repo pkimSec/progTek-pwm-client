@@ -21,6 +21,11 @@ class AppConfig:
     token_refresh_interval: int = 45  # minutes
     session_timeout: int = 60  # minutes
     
+    # User Preferences
+    remember_email: bool = False
+    last_email: str = ""
+    remember_server: bool = True
+    
     @classmethod
     def load(cls) -> 'AppConfig':
         """Load configuration from environment and config file"""
@@ -77,7 +82,10 @@ class AppConfig:
             'window_width': self.window_width,
             'window_height': self.window_height,
             'token_refresh_interval': self.token_refresh_interval,
-            'session_timeout': self.session_timeout
+            'session_timeout': self.session_timeout,
+            'remember_email': self.remember_email,
+            'last_email': self.last_email,
+            'remember_server': self.remember_server
         }
         
         with open(config_file, 'w') as f:

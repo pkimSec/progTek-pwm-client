@@ -3,6 +3,7 @@ from functools import wraps
 from typing import Callable, Any
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 import traceback
+from PyQt6 import sip
 
 class AsyncRunner(QObject):
     """Utility class to run async functions from Qt"""
@@ -40,12 +41,16 @@ def async_callback(func: Callable) -> Callable:
                 result = await func(self, *args, **kwargs)
                 return result
             except Exception as e:
-                if hasattr(self, 'handle_error'):
+                # Check if the object still exists before handling the error
+                if hasattr(self, 'handle_error') and not sip.isdeleted(self):
                     self.handle_error(e)
                 else:
-                    raise e
+                    print(f"Error in async callback: {e}")
+                    traceback.print_exc()
         
+        # Store a reference to self in the runner to prevent premature garbage collection
         runner = AsyncRunner(self)
+        runner.self_ref = self  # Keep reference to self
         QTimer.singleShot(0, lambda: runner.run(async_func()))
         
     return wrapper

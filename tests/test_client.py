@@ -6,7 +6,7 @@ from datetime import datetime
 # Configuration
 BASE_URL = "http://127.0.0.1:5000/api"
 ADMIN_EMAIL = "admin@localhost"
-ADMIN_PASSWORD = "yUGrcVP0rCX9uDwB"
+ADMIN_PASSWORD = "ErvWr9PtY3AqqoaZ"
 
 @pytest.fixture
 def admin_token():

@@ -20,13 +20,45 @@ class APIClient:
         self.session: Optional[aiohttp.ClientSession] = None
         self._access_token: Optional[str] = None
         self._rate_limit_remaining: int = 20
-        self._rate_limit_reset: Optional[datetime] = None   
+        self._rate_limit_reset: Optional[datetime] = None
+
+    def __del__(self):
+        """Ensure proper cleanup of resources"""
+        try:
+            if hasattr(self, 'session') and self.session and not self.session.closed:
+                import asyncio
+                try:
+                    # Just suppress errors during cleanup
+                    pass
+                except:
+                    pass
+        except:
+            pass   
 
     async def ensure_session(self):
         """Ensure we have a valid session"""
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+            cookie_jar = aiohttp.CookieJar(unsafe=True)  # Allow cookies without secure flag for local dev
+            self.session = aiohttp.ClientSession(timeout=timeout, cookie_jar=cookie_jar)
+            print("Session created successfully")
+
+    def __del__(self):
+        """Ensure proper cleanup of resources"""
+        # Prevent error when event loop is already closed
+        try:
+            if hasattr(self, 'session') and self.session and not self.session.closed:
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.session.close())
+                    else:
+                        loop.run_until_complete(self.session.close())
+                except:
+                    pass
+        except:
+            pass
 
     @property
     def is_authenticated(self) -> bool:
@@ -93,18 +125,23 @@ class APIClient:
 
         return data
 
-    async def _request(
-        self,
-        method: str,
-        url: str,
-        data: Optional[Dict] = None,
-        include_auth: bool = True
-    ) -> Any:
+    async def _request(self, method: str, url: str, data: Optional[Dict] = None, include_auth: bool = True) -> Any:
         """Make HTTP request to API"""
         await self.ensure_session()
 
         try:
             headers = self._get_headers(include_auth)
+            print(f"API Request: {method} {url}")
+            print(f"Headers: {headers}")
+            if data:
+                print(f"Data: {data}")
+        
+            # Debug cookies before request
+            print("Cookies before request:")
+            if self.session and self.session.cookie_jar:
+                for cookie in self.session.cookie_jar:
+                    print(f"Cookie: {cookie.key}={cookie.value}")
+            
             async with self.session.request(
                 method=method,
                 url=url,
@@ -112,6 +149,10 @@ class APIClient:
                 headers=headers,
                 ssl=False  # Disable SSL verification for local development
             ) as response:
+                # Debug response
+                print(f"Response status: {response.status}")
+                print(f"Response headers: {response.headers}")
+            
                 # Update rate limit info
                 self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
                 reset_time = response.headers.get('X-RateLimit-Reset')
@@ -120,8 +161,10 @@ class APIClient:
 
                 try:
                     data = await response.json()
+                    print(f"Response data: {data}")
                 except json.JSONDecodeError:
                     data = await response.text()
+                    print(f"Raw response text: {data}")
 
                 if not response.ok:
                     raise APIError(
@@ -132,6 +175,7 @@ class APIClient:
                 return data
                 
         except aiohttp.ClientError as e:
+            print(f"Network error: {str(e)}")
             raise APIError(
                 message=f"Network error: {str(e)}",
                 status_code=0
@@ -142,6 +186,13 @@ class APIClient:
         data = LoginRequest(email=email, password=password).model_dump()
         response = await self._request('POST', self.endpoints.login, data, include_auth=False)
         self._access_token = response['access_token']
+    
+        # Debug session cookies after login
+        print("Session cookies after login:")
+        if self.session and self.session.cookie_jar:
+            for cookie in self.session.cookie_jar:
+                print(f"Cookie: {cookie.key}={cookie.value}")
+    
         return LoginResponse(**response)
 
     async def logout(self):
@@ -162,6 +213,14 @@ class APIClient:
             invite_code=invite_code
         ).model_dump()
         return await self._request('POST', self.endpoints.register, data, include_auth=False)
+
+    async def verify_session(self):
+        """Verify that the session is valid"""
+        try:
+            return await self._request('GET', self.endpoints._url('/api/debug/token'), include_auth=True)
+        except APIError as e:
+            print(f"Session verification failed: {e.message} (Status: {e.status_code})")
+            return None
 
     async def create_invite(self) -> str:
         """Create invite code (admin only)"""
