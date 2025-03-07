@@ -1,8 +1,9 @@
 import aiohttp
 import json
 import asyncio
-from typing import Optional, Dict, Any, Union
-from datetime import datetime
+import weakref
+from typing import Optional, Dict, Any, Union, ClassVar
+from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
 from .endpoints import APIEndpoints
@@ -11,27 +12,66 @@ from .models import (
     PasswordEntry, EntryVersion, APIError
 )
 
+# Global session tracker
+_active_sessions = set()
+
 class APIClient:
     """Asynchronous API client for password manager server"""
+    
+    # Class variable for session cache
+    _instance_cache: ClassVar[Dict[str, 'APIClient']] = {}
     
     def __init__(self, base_url: str):
         """Initialize API client with base URL"""
         self.endpoints = APIEndpoints(base_url)
         self.session: Optional[aiohttp.ClientSession] = None
         self._access_token: Optional[str] = None
+        self._session_token: Optional[str] = None
+        self._token_expires_at: Optional[datetime] = None
         self._rate_limit_remaining: int = 20
         self._rate_limit_reset: Optional[datetime] = None   
+        self._master_password: Optional[str] = None  # Store master password for vault operations
+        self._user_email: Optional[str] = None  # Store user email for reconnection
+        self._is_closing = False  # Flag to prevent multiple close attempts
+        
+        # Cache this instance by base_url for reuse
+        APIClient._instance_cache[base_url] = self
+        
+        print(f"Created new APIClient for {base_url}")
+
+    @classmethod
+    def get_instance(cls, base_url: str) -> 'APIClient':
+        """Get existing client instance or create a new one"""
+        if base_url in cls._instance_cache:
+            return cls._instance_cache[base_url]
+        return cls(base_url)
+    
+    @classmethod
+    def clear_all_instances(cls):
+        """Clear all cached instances"""
+        print(f"Clearing {len(cls._instance_cache)} APIClient instances")
+        cls._instance_cache.clear()
 
     async def ensure_session(self):
         """Ensure we have a valid session"""
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
             self.session = aiohttp.ClientSession(timeout=timeout)
+            # Track the session
+            _active_sessions.add(weakref.ref(self.session, lambda _: _active_sessions.discard(_)))
+            print(f"Created new session, total active: {len(_active_sessions)}")
 
     @property
     def is_authenticated(self) -> bool:
         """Check if client has valid access token"""
-        return bool(self._access_token)
+        return bool(self._access_token) and (
+            self._token_expires_at is None or 
+            self._token_expires_at > datetime.now()
+        )
+    
+    def set_master_password(self, password: str) -> None:
+        """Set master password for vault operations"""
+        self._master_password = password
 
     async def __aenter__(self):
         """Context manager entry - create session"""
@@ -48,14 +88,32 @@ class APIClient:
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
             self.session = aiohttp.ClientSession(timeout=timeout)
+            # Track the session
+            _active_sessions.add(weakref.ref(self.session, lambda _: _active_sessions.discard(_)))
+            print(f"Created new session, total active: {len(_active_sessions)}")
             print("Session created successfully")
 
     async def close(self):
         """Close the session"""
+        if self._is_closing:
+            print("Close already in progress, skipping")
+            return
+            
+        self._is_closing = True
+        print(f"Closing API client session for {self.endpoints.base_url}")
+        
         if self.session and not self.session.closed:
-            await self.session.close()
-            self.session = None
-
+            try:
+                print(f"Closing session {id(self.session)}")
+                await self.session.close()
+                print("Session closed successfully")
+            except Exception as e:
+                print(f"Error closing session: {str(e)}")
+            finally:
+                self.session = None
+                
+        self._is_closing = False
+                
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers including auth token if available"""
         headers = {
@@ -65,6 +123,10 @@ class APIClient:
         
         if include_auth and self._access_token:
             headers['Authorization'] = f'Bearer {self._access_token}'
+        
+        # Add session token if available
+        if self._session_token:
+            headers['X-Session-ID'] = self._session_token
             
         return headers
 
@@ -98,9 +160,10 @@ class APIClient:
         method: str,
         url: str,
         data: Optional[Dict] = None,
-        include_auth: bool = True
+        include_auth: bool = True,
+        retry_auth: bool = True
     ) -> Any:
-        """Make HTTP request to API"""
+        """Make HTTP request to API with optional token refresh"""
         await self.ensure_session()
 
         try:
@@ -117,6 +180,21 @@ class APIClient:
                 reset_time = response.headers.get('X-RateLimit-Reset')
                 if reset_time:
                     self._rate_limit_reset = datetime.fromtimestamp(int(reset_time))
+
+                # Check for 401 Unauthorized - token might be expired
+                if response.status == 401 and retry_auth and self._master_password and self._user_email:
+                    print("Token expired. Attempting to reauthenticate...")
+                    
+                    # Try to reauthenticate and retry the request
+                    try:
+                        # Relogin with stored credentials
+                        await self.login(self._user_email, self._master_password)
+                        
+                        # Retry the request with new token
+                        return await self._request(method, url, data, include_auth, False)
+                    except Exception as e:
+                        print(f"Reauthentication failed: {str(e)}")
+                        # Let the original 401 error propagate
 
                 try:
                     data = await response.json()
@@ -142,17 +220,39 @@ class APIClient:
         data = LoginRequest(email=email, password=password).model_dump()
         response = await self._request('POST', self.endpoints.login, data, include_auth=False)
         self._access_token = response['access_token']
+        
+        # Store session token if provided
+        if 'session_token' in response:
+            self._session_token = response['session_token']
+        
+        # Set token expiration (1 hour from now - matches server config)
+        self._token_expires_at = datetime.now() + timedelta(hours=1)
+        
+        # Store credentials for potential auto-reconnect
+        self._user_email = email
+        self._master_password = password
+        
         return LoginResponse(**response)
 
     async def logout(self):
         """Log out user and clear session"""
+        print(f"Logging out session {id(self) if self else 'None'}")
         if self.session and not self.session.closed:
             try:
                 await self._request('POST', self.endpoints.logout)
+                print("Logout API request completed")
+            except Exception as e:
+                print(f"Error during logout request: {str(e)}")
             finally:
                 self._access_token = None
-                await self.session.close()
-                self.session = None
+                self._session_token = None
+                self._token_expires_at = None
+                self._master_password = None
+                self._user_email = None
+                await self.close()
+                print("Logout cleanup complete")
+        else:
+            print("No active session to logout")
 
     async def register(self, email: str, password: str, invite_code: str):
         """Register new user"""

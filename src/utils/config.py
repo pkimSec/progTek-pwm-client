@@ -13,13 +13,17 @@ class AppConfig:
     api_timeout: int = 30
     
     # UI Configuration
-    theme: str = "light"
+    theme: str = "dark"
     window_width: int = 1200
     window_height: int = 800
     
     # Security Configuration
     token_refresh_interval: int = 45  # minutes
     session_timeout: int = 60  # minutes
+    
+    # User Preferences
+    remember_email: bool = False
+    last_email: str = ""
     
     @classmethod
     def load(cls) -> 'AppConfig':
@@ -77,7 +81,9 @@ class AppConfig:
             'window_width': self.window_width,
             'window_height': self.window_height,
             'token_refresh_interval': self.token_refresh_interval,
-            'session_timeout': self.session_timeout
+            'session_timeout': self.session_timeout,
+            'remember_email': self.remember_email,
+            'last_email': self.last_email
         }
         
         with open(config_file, 'w') as f:

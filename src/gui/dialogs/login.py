@@ -1,21 +1,25 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QMessageBox, QFormLayout
+    QLineEdit, QPushButton, QMessageBox, QFormLayout,
+    QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 import traceback
+import re
 import sys
 
 from api.client import APIClient
 from api.models import APIError, LoginResponse
 from utils.config import AppConfig
 from utils.async_utils import async_callback
+from utils.session import UserSession
 from .base_dialog import BaseDialog
 
 class LoginDialog(BaseDialog):
     """Login dialog with server connection test"""
     
-    login_successful = pyqtSignal(LoginResponse)
+    login_successful = pyqtSignal(LoginResponse, str)  # Added master_password parameter
+    register_clicked = pyqtSignal()
     
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -33,10 +37,6 @@ class LoginDialog(BaseDialog):
         # Main layout
         layout = QVBoxLayout(self)
         
-        # Server status label
-        self.status_label = QLabel("Server status: Not connected")
-        layout.addWidget(self.status_label)
-        
         # Server settings
         server_group = QFormLayout()
         self.server_url = QLineEdit(self.config.api_base_url)
@@ -44,26 +44,40 @@ class LoginDialog(BaseDialog):
         self.server_url.textChanged.connect(self.on_server_url_changed)
         server_group.addRow("Server URL:", self.server_url)
         
-        # Test connection button
+        # Test connection layout with status on the right
         test_layout = QHBoxLayout()
         self.test_btn = QPushButton("Test Connection")
         self.test_btn.clicked.connect(self.on_test_connection_clicked)
-        test_layout.addStretch()
         test_layout.addWidget(self.test_btn)
+        test_layout.addStretch()
         
-        # Login form
-        form_layout = QFormLayout()
+        # Server status label moved to the same line as the test button
+        self.status_label = QLabel("Server status: Not connected")
+        test_layout.addWidget(self.status_label)
+
         self.email = QLineEdit()
         self.email.setPlaceholderText("Enter your email")
         self.email.textChanged.connect(self.validate_form)
-        
+
+        # If there's a remembered email, set it
+        if self.config.remember_email and self.config.last_email:
+            self.email.setText(self.config.last_email)
+
         self.password = QLineEdit()
         self.password.setPlaceholderText("Enter your password")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.password.textChanged.connect(self.validate_form)
+        self.password.returnPressed.connect(self.handle_login)  # Enter key submits form
         
+        # Login form
+        form_layout = QFormLayout()
         form_layout.addRow("Email:", self.email)
         form_layout.addRow("Password:", self.password)
+        
+        # Remember email checkbox
+        self.remember_email = QCheckBox("Remember email")
+        self.remember_email.setChecked(self.config.remember_email)
+        form_layout.addRow("", self.remember_email)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -73,6 +87,7 @@ class LoginDialog(BaseDialog):
         
         self.register_btn = QPushButton("Register")
         self.register_btn.setEnabled(False)
+        self.register_btn.clicked.connect(self.handle_register)
         
         button_layout.addWidget(self.register_btn)
         button_layout.addWidget(self.login_btn)
@@ -90,6 +105,10 @@ class LoginDialog(BaseDialog):
         # Set default focus
         self.server_url.setFocus()
 
+        # Auto-test connection on startup
+        if self.server_url.text().strip():
+            self.test_connection()
+
     def on_server_url_changed(self):
         """Handle server URL changes"""
         print("Server URL changed")
@@ -98,6 +117,35 @@ class LoginDialog(BaseDialog):
         self.register_btn.setEnabled(False)
         self.status_label.setText("Server status: Not connected")
         self.status_label.setStyleSheet("color: gray")
+        
+        # Validate URL format
+        url = self.server_url.text().strip()
+        if url:
+            # Allow localhost with or without protocol
+            if url in ["localhost:5000", "127.0.0.1:5000"]:
+                self.server_url.setText(f"http://{url}")
+                return
+                
+            # Basic URL validation
+            url_pattern = re.compile(
+                r'^(http|https)://'  # http:// or https://
+                r'([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?'  # domain
+                r'(:[0-9]+)?'  # optional port
+                r'(/.*)?$'  # optional path
+            )
+            
+            # Also accept http://localhost:port format
+            localhost_pattern = re.compile(
+                r'^(http|https)://'  # http:// or https://
+                r'(localhost|127\.0\.0\.1)'  # localhost or 127.0.0.1
+                r'(:[0-9]+)?'  # optional port
+                r'(/.*)?$'  # optional path
+            )
+            
+            if not (url_pattern.match(url) or localhost_pattern.match(url)):
+                self.status_label.setText("Server status: Invalid URL format")
+                self.status_label.setStyleSheet("color: red")
+                return
 
     def on_test_connection_clicked(self):
         """Handle test connection button click"""
@@ -106,11 +154,19 @@ class LoginDialog(BaseDialog):
     
     def validate_form(self):
         """Enable/disable login button based on form validity"""
+        # Check if UI elements have been initialized
+        if not hasattr(self, 'login_btn') or not hasattr(self, 'email'):
+            return
+            
         email = self.email.text().strip()
-        password = self.password.text().strip()
+        password = self.password.text().strip() if hasattr(self, 'password') else ""
         has_credentials = bool(email and password)
 
         self.login_btn.setEnabled(self.is_connected and has_credentials)
+    
+    def handle_register(self):
+        """Handle register button click"""
+        self.register_clicked.emit()
     
     @async_callback
     async def test_connection(self):
@@ -121,6 +177,15 @@ class LoginDialog(BaseDialog):
             print("No server URL provided")
             self.show_error(ValueError("Please enter server URL"))
             return
+        
+        # Ensure URL has proper format
+        if not server_url.startswith("http://") and not server_url.startswith("https://"):
+            # Check if it's localhost or IP without http://
+            if server_url == "localhost:5000" or server_url == "127.0.0.1:5000":
+                server_url = "http://" + server_url
+            else:
+                self.show_error(ValueError("Invalid URL format. Must start with http:// or https://"))
+                return
             
         print(f"Testing connection to: {server_url}")
         # Update client with new URL
@@ -139,12 +204,11 @@ class LoginDialog(BaseDialog):
                 await self.api_client.login("test", "test")
             except APIError as e:
                 print(f"Received API error: {e.status_code} - {e.message}")
-                # If we get a 401, the connection works
+                # If 401, the connection works (authentication failed but API is responding)
                 if e.status_code == 401:
                     self.is_connected = True
                     self.status_label.setText("Server status: Connected")
                     self.status_label.setStyleSheet("color: green")
-                    self.show_success("Connection successful!")
                     
                     # Enable buttons if form is valid
                     self.register_btn.setEnabled(True)
@@ -194,11 +258,18 @@ class LoginDialog(BaseDialog):
             response = await self.api_client.login(email, password)
             print("Login successful")
             
-            # Save successful login
+            # Save email if remember checkbox is checked
+            self.config.remember_email = self.remember_email.isChecked()
+            if self.config.remember_email:
+                self.config.last_email = email
+            else:
+                self.config.last_email = ""
+    
+            # Save successful login in config
             self.config.save()
-            
-            # Emit success signal with login response
-            self.login_successful.emit(response)
+
+            # Emit success signal with login response and master password
+            self.login_successful.emit(response, password)
             
             # Close dialog
             self.accept()

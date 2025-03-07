@@ -45,7 +45,26 @@ def async_callback(func: Callable) -> Callable:
                 else:
                     raise e
         
-        runner = AsyncRunner(self)
+        # Check if self is a QObject before using as parent
+        if isinstance(self, QObject):
+            runner = AsyncRunner(self)
+        else:
+            # Use no parent if self is not a QObject
+            runner = AsyncRunner()
+            
         QTimer.singleShot(0, lambda: runner.run(async_func()))
         
     return wrapper
+
+def standalone_async_task(func: Callable, *args, **kwargs) -> None:
+    """Run an async function without needing a QObject instance"""
+    async def async_func():
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            print(f"Error in standalone_async_task: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    runner = AsyncRunner()  # No parent
+    QTimer.singleShot(0, lambda: runner.run(async_func()))
