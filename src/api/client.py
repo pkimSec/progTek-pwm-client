@@ -1,10 +1,9 @@
 import aiohttp
 import json
 import asyncio
-from typing import Optional, Dict, Any, Union
-from datetime import datetime
+from typing import Optional, Dict, Any, Union, ClassVar
+from datetime import datetime, timedelta
 from urllib.parse import urljoin
-from yarl import URL
 
 from .endpoints import APIEndpoints
 from .models import (
@@ -15,26 +14,48 @@ from .models import (
 class APIClient:
     """Asynchronous API client for password manager server"""
     
+    # Class variable for session cache
+    _instance_cache: ClassVar[Dict[str, 'APIClient']] = {}
+    
     def __init__(self, base_url: str):
         """Initialize API client with base URL"""
         self.endpoints = APIEndpoints(base_url)
         self.session: Optional[aiohttp.ClientSession] = None
         self._access_token: Optional[str] = None
+        self._session_token: Optional[str] = None
+        self._token_expires_at: Optional[datetime] = None
         self._rate_limit_remaining: int = 20
         self._rate_limit_reset: Optional[datetime] = None   
-        self._session_id: Optional[str] = None  # Store session ID if available
+        self._master_password: Optional[str] = None  # Store master password for vault operations
+        self._user_email: Optional[str] = None  # Store user email for reconnection
+        
+        # Cache this instance by base_url for reuse
+        APIClient._instance_cache[base_url] = self
+
+    @classmethod
+    def get_instance(cls, base_url: str) -> 'APIClient':
+        """Get existing client instance or create a new one"""
+        if base_url in cls._instance_cache:
+            return cls._instance_cache[base_url]
+        return cls(base_url)
 
     async def ensure_session(self):
         """Ensure we have a valid session"""
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
-            cookie_jar = aiohttp.CookieJar(unsafe=True)
-            self.session = aiohttp.ClientSession(timeout=timeout, cookie_jar=cookie_jar)
+            self.session = aiohttp.ClientSession(timeout=timeout)
 
     @property
     def is_authenticated(self) -> bool:
         """Check if client has valid access token"""
-        return bool(self._access_token)
+        return bool(self._access_token) and (
+            self._token_expires_at is None or 
+            self._token_expires_at > datetime.now()
+        )
+    
+    def set_master_password(self, password: str) -> None:
+        """Set master password for vault operations"""
+        self._master_password = password
 
     async def __aenter__(self):
         """Context manager entry - create session"""
@@ -46,21 +67,12 @@ class APIClient:
         await self.close()
 
     async def create_session(self):
-        """Create new aiohttp session with proper cookie handling"""
+        """Create new aiohttp session"""
         print("Creating new aiohttp session")
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
-        
-            # Create cookie jar with more permissive settings for API clients
-            # This is the key change - we need to allow cookies in a non-browser context
-            cookie_jar = aiohttp.CookieJar(unsafe=True)
-        
-            # Create session with cookie jar
-            self.session = aiohttp.ClientSession(
-                timeout=timeout,
-                cookie_jar=cookie_jar
-            )
-            print("Session created successfully with cookie support")
+            self.session = aiohttp.ClientSession(timeout=timeout)
+            print("Session created successfully")
 
     async def close(self):
         """Close the session"""
@@ -69,35 +81,20 @@ class APIClient:
             self.session = None
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
-        """Get request headers including auth token and session token"""
+        """Get request headers including auth token if available"""
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-    
+        
         if include_auth and self._access_token:
             headers['Authorization'] = f'Bearer {self._access_token}'
-    
-        # Include session token if available
-        if hasattr(self, '_session_token') and self._session_token:
-            headers['X-API-Session-Token'] = self._session_token
         
-        return headers
-
-    async def _debug_print_cookies(self, msg="Current cookies"):
-        """Debug helper to print current cookies"""
-        if not self.session:
-            print("No session available")
-            return
+        # Add session token if available
+        if self._session_token:
+            headers['X-Session-ID'] = self._session_token
             
-        cookies = self.session.cookie_jar.filter_cookies(URL(self.endpoints.base_url))
-        print(f"\n{msg}:")
-        if not cookies:
-            print("  No cookies found")
-        else:
-            for name, cookie in cookies.items():
-                print(f"  {name}: {cookie.value} (domain={cookie.domain}, path={cookie.path})")
-        print()
+        return headers
 
     async def _handle_response(self, response: aiohttp.ClientResponse) -> Any:
         """Handle API response and potential errors"""
@@ -108,17 +105,6 @@ class APIClient:
         reset_time = response.headers.get('X-RateLimit-Reset')
         if reset_time:
             self._rate_limit_reset = datetime.fromtimestamp(int(reset_time))
-
-        # Check for session ID in response headers
-        if 'X-Session-ID' in response.headers:
-            self._session_id = response.headers['X-Session-ID']
-            print(f"Updated session ID: {self._session_id}")
-
-        # Print cookies from response
-        if response.cookies:
-            print("Cookies received in response:")
-            for name, cookie in response.cookies.items():
-                print(f"  {name}: {cookie}")
 
         try:
             data = await response.json()
@@ -140,18 +126,14 @@ class APIClient:
         method: str,
         url: str,
         data: Optional[Dict] = None,
-        include_auth: bool = True
+        include_auth: bool = True,
+        retry_auth: bool = True
     ) -> Any:
-        """Make HTTP request to API"""
+        """Make HTTP request to API with optional token refresh"""
         await self.ensure_session()
-        
-        # Print cookies before making the request
-        await self._debug_print_cookies(f"Cookies before {method} {url}")
 
         try:
             headers = self._get_headers(include_auth)
-            print(f"Sending headers: {headers}")
-            
             async with self.session.request(
                 method=method,
                 url=url,
@@ -159,22 +141,26 @@ class APIClient:
                 headers=headers,
                 ssl=False  # Disable SSL verification for local development
             ) as response:
-                # Print response headers for debugging
-                print(f"Response headers: {dict(response.headers)}")
-                
                 # Update rate limit info
                 self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
                 reset_time = response.headers.get('X-RateLimit-Reset')
                 if reset_time:
                     self._rate_limit_reset = datetime.fromtimestamp(int(reset_time))
 
-                # Check for session ID in headers
-                if 'X-Session-ID' in response.headers:
-                    self._session_id = response.headers['X-Session-ID']
-                    print(f"Received session ID: {self._session_id}")
+                # Check for 401 Unauthorized - token might be expired
+                if response.status == 401 and retry_auth and self._master_password and self._user_email:
+                    print("Token expired. Attempting to reauthenticate...")
                     
-                # Print cookies after the request
-                await self._debug_print_cookies(f"Cookies after {method} {url}")
+                    # Try to reauthenticate and retry the request
+                    try:
+                        # Relogin with stored credentials
+                        await self.login(self._user_email, self._master_password)
+                        
+                        # Retry the request with new token
+                        return await self._request(method, url, data, include_auth, False)
+                    except Exception as e:
+                        print(f"Reauthentication failed: {str(e)}")
+                        # Let the original 401 error propagate
 
                 try:
                     data = await response.json()
@@ -200,12 +186,18 @@ class APIClient:
         data = LoginRequest(email=email, password=password).model_dump()
         response = await self._request('POST', self.endpoints.login, data, include_auth=False)
         self._access_token = response['access_token']
-    
+        
         # Store session token if provided
         if 'session_token' in response:
             self._session_token = response['session_token']
-            print(f"Received session token: {self._session_token}")
-    
+        
+        # Set token expiration (1 hour from now - matches server config)
+        self._token_expires_at = datetime.now() + timedelta(hours=1)
+        
+        # Store credentials for potential auto-reconnect
+        self._user_email = email
+        self._master_password = password
+        
         return LoginResponse(**response)
 
     async def logout(self):
@@ -213,9 +205,14 @@ class APIClient:
         if self.session and not self.session.closed:
             try:
                 await self._request('POST', self.endpoints.logout)
+            except Exception as e:
+                print(f"Error during logout: {str(e)}")
             finally:
                 self._access_token = None
-                self._session_id = None
+                self._session_token = None
+                self._token_expires_at = None
+                self._master_password = None
+                self._user_email = None
                 await self.session.close()
                 self.session = None
 

@@ -1,110 +1,159 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QGroupBox, QFormLayout,
-    QHeaderView
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QPushButton, QLineEdit, QGroupBox, QFormLayout,
+    QTextEdit, QDialog, QDialogButtonBox, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QClipboard, QGuiApplication, QAction
+from PyQt6.QtGui import QClipboard, QGuiApplication
 
 from api.client import APIClient
-from api.models import APIError
 from utils.async_utils import async_callback
 
+class InviteDialog(QDialog):
+    """Dialog to display generated invite code"""
+    
+    def __init__(self, invite_code: str, parent=None):
+        super().__init__(parent)
+        self.invite_code = invite_code
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Set up the user interface"""
+        self.setWindowTitle("Invite Code Generated")
+        
+        layout = QVBoxLayout(self)
+        
+        # Instruction
+        info_label = QLabel(
+            "A new invite code has been generated. Share this with a user to allow them to register."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # Invite code field
+        invite_layout = QHBoxLayout()
+        self.code_field = QLineEdit(self.invite_code)
+        self.code_field.setReadOnly(True)
+        invite_layout.addWidget(self.code_field)
+        
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(self.copy_invite_code)
+        invite_layout.addWidget(copy_btn)
+        
+        layout.addLayout(invite_layout)
+        
+        # Security warning
+        warning_label = QLabel(
+            "<b>Security Notice:</b> This invite code grants access to your password vault. "
+            "Share it only with trusted individuals through a secure channel."
+        )
+        warning_label.setWordWrap(True)
+        warning_label.setStyleSheet("color: #CC0000")
+        layout.addWidget(warning_label)
+        
+        # Button box
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        button_box.accepted.connect(self.accept)
+        layout.addWidget(button_box)
+    
+    def copy_invite_code(self):
+        """Copy invite code to clipboard"""
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(self.invite_code)
+        
+        # Show confirmation
+        QMessageBox.information(
+            self, "Copied", 
+            "Invite code copied to clipboard!",
+            QMessageBox.StandardButton.Ok
+        )
+
 class AdminView(QWidget):
-    """Admin view for managing users and invite codes"""
+    """View for administrative functions"""
     
     def __init__(self, api_client: APIClient, parent=None):
         super().__init__(parent)
         self.api_client = api_client
-        self.invite_codes = []
         self.setup_ui()
     
     def setup_ui(self):
-        """Initialize the user interface"""
+        """Set up the user interface"""
         layout = QVBoxLayout(self)
         
         # Title
-        title = QLabel("Admin Dashboard")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title = QLabel("<h2>Admin Dashboard</h2>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
-        # Invite code section
-        invite_group = QGroupBox("Invite Codes")
-        invite_layout = QVBoxLayout()
+        # Invite management section
+        invite_group = QGroupBox("User Invitations")
+        invite_layout = QVBoxLayout(invite_group)
         
-        # Create invite button
-        self.create_invite_btn = QPushButton("Generate New Invite Code")
-        self.create_invite_btn.clicked.connect(self.create_invite_code)
-        invite_layout.addWidget(self.create_invite_btn)
+        invite_info = QLabel(
+            "Generate invite codes for new users. Each code can only be used once."
+        )
+        invite_info.setWordWrap(True)
+        invite_layout.addWidget(invite_info)
         
-        # Invite codes table
-        self.invite_table = QTableWidget(0, 2)  # Rows, Columns
-        self.invite_table.setHorizontalHeaderLabels(["Invite Code", "Actions"])
-        self.invite_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.invite_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        invite_layout.addWidget(self.invite_table)
+        # Generate invite button
+        generate_btn = QPushButton("Generate New Invite Code")
+        generate_btn.clicked.connect(self.generate_invite_code)
+        invite_layout.addWidget(generate_btn)
         
-        invite_group.setLayout(invite_layout)
         layout.addWidget(invite_group)
         
-        # Status message
-        self.status_label = QLabel("Ready")
-        layout.addWidget(self.status_label)
+        # User management section (placeholder for future implementation)
+        user_group = QGroupBox("User Management")
+        user_layout = QVBoxLayout(user_group)
+        
+        user_info = QLabel(
+            "User management functionality will be available in a future update.\n\n"
+            "Planned features:\n"
+            "- List all users\n"
+            "- Enable/disable user accounts\n"
+            "- Reset user passwords\n"
+            "- View user activity logs"
+        )
+        user_info.setWordWrap(True)
+        user_layout.addWidget(user_info)
+        
+        layout.addWidget(user_group)
+        
+        # System information (placeholder)
+        system_group = QGroupBox("System Information")
+        system_layout = QVBoxLayout(system_group)
+        
+        system_info = QLabel(
+            "System information will be available in a future update.\n\n"
+            "Planned features:\n"
+            "- Server status monitoring\n"
+            "- Database statistics\n"
+            "- Active sessions\n"
+            "- System logs"
+        )
+        system_info.setWordWrap(True)
+        system_layout.addWidget(system_info)
+        
+        layout.addWidget(system_group)
+        
+        # Add stretch to push everything to the top
+        layout.addStretch()
     
     @async_callback
-    async def create_invite_code(self):
+    async def generate_invite_code(self):
         """Generate a new invite code"""
         try:
-            self.status_label.setText("Generating invite code...")
-            self.create_invite_btn.setEnabled(False)
-            
-            # Call API to create invite code
+            # Call API to create invite
             invite_code = await self.api_client.create_invite()
-            print(f"Generated invite code: {invite_code}")
             
-            # Add to table
-            self.add_invite_to_table(invite_code)
+            # Show invite code dialog
+            dialog = InviteDialog(invite_code, self)
+            dialog.exec()
             
-            self.status_label.setText("Invite code generated successfully")
-            QMessageBox.information(self, "Success", "New invite code generated successfully.")
-            
-        except APIError as e:
-            self.status_label.setText(f"Error: {e.message}")
-            QMessageBox.critical(self, "Error", f"Failed to generate invite code: {e.message}")
         except Exception as e:
-            self.status_label.setText(f"Error: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to generate invite code: {str(e)}")
-        finally:
-            self.create_invite_btn.setEnabled(True)
-    
-    def add_invite_to_table(self, invite_code: str):
-        """Add invite code to the table"""
-        # Add to stored list
-        self.invite_codes.append(invite_code)
-        
-        # Add row to table
-        row_position = self.invite_table.rowCount()
-        self.invite_table.insertRow(row_position)
-        
-        # Add invite code
-        code_item = QTableWidgetItem(invite_code)
-        code_item.setFlags(code_item.flags() & ~Qt.ItemFlag.ItemIsEditable)  # Make read-only
-        self.invite_table.setItem(row_position, 0, code_item)
-        
-        # Add action buttons
-        actions_widget = QWidget()
-        actions_layout = QHBoxLayout(actions_widget)
-        actions_layout.setContentsMargins(2, 2, 2, 2)
-        
-        # Copy button
-        copy_btn = QPushButton("Copy")
-        copy_btn.clicked.connect(lambda: self.copy_invite_code(invite_code))
-        actions_layout.addWidget(copy_btn)
-        
-        self.invite_table.setCellWidget(row_position, 1, actions_widget)
-    
-    def copy_invite_code(self, invite_code: str):
-        """Copy invite code to clipboard"""
-        clipboard = QGuiApplication.clipboard()
-        clipboard.setText(invite_code)
-        self.status_label.setText("Invite code copied to clipboard")    
+            # Show error
+            QMessageBox.critical(
+                self, "Error", 
+                f"Failed to generate invite code: {str(e)}",
+                QMessageBox.StandardButton.Ok
+            )

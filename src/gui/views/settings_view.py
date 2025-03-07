@@ -1,155 +1,177 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, 
-    QPushButton, QGroupBox, QLabel, QHBoxLayout, QSpinBox,
-    QMessageBox, QCheckBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QPushButton, QFormLayout, QComboBox, QSpinBox,
+    QLineEdit, QGroupBox, QCheckBox, QTabWidget
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt
 
+from api.client import APIClient
 from utils.config import AppConfig
+from utils.async_utils import async_callback
 
 class SettingsView(QWidget):
     """View for application settings"""
     
-    config_changed = pyqtSignal()
-    
-    def __init__(self, config: AppConfig, parent=None):
+    def __init__(self, api_client: APIClient, config: AppConfig, parent=None):
         super().__init__(parent)
+        self.api_client = api_client
         self.config = config
         self.setup_ui()
-        self.load_settings()
     
     def setup_ui(self):
-        """Initialize the user interface"""
+        """Set up the user interface"""
         layout = QVBoxLayout(self)
         
-        # Title
-        title = QLabel("Settings")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
+        # Create tabs for different settings categories
+        tabs = QTabWidget()
         
-        # Server settings
-        server_group = QGroupBox("Server Connection")
-        server_layout = QFormLayout()
+        # General settings tab
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
         
-        self.server_url = QLineEdit()
-        server_layout.addRow("Server URL:", self.server_url)
+        # Theme setting
+        theme_group = QGroupBox("Appearance")
+        theme_layout = QFormLayout(theme_group)
         
-        self.timeout = QSpinBox()
-        self.timeout.setRange(5, 120)
-        self.timeout.setSuffix(" seconds")
-        server_layout.addRow("Connection Timeout:", self.timeout)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Light", "Dark"])
+        if self.config.theme == "dark":
+            self.theme_combo.setCurrentIndex(1)
+        self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
+        theme_layout.addRow("Theme:", self.theme_combo)
         
-        self.remember_server = QCheckBox("Remember server URL")
-        server_layout.addRow("", self.remember_server)
-        
-        server_group.setLayout(server_layout)
-        layout.addWidget(server_group)
-        
-        # User Interface settings
-        ui_group = QGroupBox("User Interface")
-        ui_layout = QFormLayout()
-        
-        self.theme = QComboBox()
-        self.theme.addItems(["Light", "Dark"])
-        ui_layout.addRow("Theme:", self.theme)
-        
-        self.remember_email = QCheckBox("Remember last email")
-        ui_layout.addRow("", self.remember_email)
-        
-        ui_group.setLayout(ui_layout)
-        layout.addWidget(ui_group)
+        general_layout.addWidget(theme_group)
         
         # Security settings
         security_group = QGroupBox("Security")
-        security_layout = QFormLayout()
-        
-        self.token_refresh = QSpinBox()
-        self.token_refresh.setRange(1, 120)
-        self.token_refresh.setSuffix(" minutes")
-        security_layout.addRow("Token Refresh Interval:", self.token_refresh)
+        security_layout = QFormLayout(security_group)
         
         self.session_timeout = QSpinBox()
-        self.session_timeout.setRange(1, 480)
+        self.session_timeout.setRange(1, 120)
+        self.session_timeout.setValue(self.config.session_timeout)
         self.session_timeout.setSuffix(" minutes")
+        self.session_timeout.valueChanged.connect(self.on_timeout_changed)
         security_layout.addRow("Session Timeout:", self.session_timeout)
         
-        security_group.setLayout(security_layout)
-        layout.addWidget(security_group)
+        self.auto_lock = QCheckBox("Lock vault on system idle")
+        self.auto_lock.setChecked(True)
+        security_layout.addRow("", self.auto_lock)
         
-        # Buttons
-        button_layout = QHBoxLayout()
+        self.clipboard_clear = QCheckBox("Clear clipboard after")
+        self.clipboard_clear.setChecked(True)
         
-        self.reset_btn = QPushButton("Reset to Defaults")
-        self.reset_btn.clicked.connect(self.reset_settings)
+        clipboard_layout = QHBoxLayout()
+        clipboard_layout.addWidget(self.clipboard_clear)
         
+        self.clipboard_timeout = QSpinBox()
+        self.clipboard_timeout.setRange(10, 300)
+        self.clipboard_timeout.setValue(30)
+        self.clipboard_timeout.setSuffix(" seconds")
+        clipboard_layout.addWidget(self.clipboard_timeout)
+        clipboard_layout.addStretch()
+        
+        security_layout.addRow("", clipboard_layout)
+        
+        general_layout.addWidget(security_group)
+        
+        # Server settings
+        server_group = QGroupBox("Server Connection")
+        server_layout = QFormLayout(server_group)
+        
+        self.server_url = QLineEdit(self.config.api_base_url)
+        self.server_url.setReadOnly(True)  # Readonly in settings, change in login dialog
+        server_layout.addRow("Server URL:", self.server_url)
+        
+        self.api_timeout = QSpinBox()
+        self.api_timeout.setRange(5, 120)
+        self.api_timeout.setValue(self.config.api_timeout)
+        self.api_timeout.setSuffix(" seconds")
+        self.api_timeout.valueChanged.connect(self.on_api_timeout_changed)
+        server_layout.addRow("API Timeout:", self.api_timeout)
+        
+        test_server_btn = QPushButton("Test Connection")
+        test_server_btn.clicked.connect(self.test_server_connection)
+        server_layout.addRow("", test_server_btn)
+        
+        general_layout.addWidget(server_group)
+        
+        # Add stretch to push everything to the top
+        general_layout.addStretch()
+        
+        # Add tab
+        tabs.addTab(general_tab, "General")
+        
+        # About tab
+        about_tab = QWidget()
+        about_layout = QVBoxLayout(about_tab)
+        
+        about_label = QLabel(
+            "<h2>Password Manager</h2>"
+            "<p>Version 0.1.0</p>"
+            "<p>Open source password manager with end-to-end encryption.</p>"
+            "<p>License: GNU General Public License v3.0</p>"
+            "<p><a href='https://github.com/pkimSec/progTek-pwm-Client'>GitHub Repository</a></p>"
+        )
+        about_label.setOpenExternalLinks(True)
+        about_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        about_label.setTextFormat(Qt.TextFormat.RichText)
+        about_layout.addWidget(about_label)
+        about_layout.addStretch()
+        
+        tabs.addTab(about_tab, "About")
+        
+        layout.addWidget(tabs)
+        
+        # Save button at bottom
         self.save_btn = QPushButton("Save Settings")
         self.save_btn.clicked.connect(self.save_settings)
-        
-        button_layout.addWidget(self.reset_btn)
-        button_layout.addStretch()
-        button_layout.addWidget(self.save_btn)
-        
-        layout.addLayout(button_layout)
-        layout.addStretch()
+        layout.addWidget(self.save_btn)
     
-    def load_settings(self):
-        """Load settings from config object"""
-        # Server settings
-        self.server_url.setText(self.config.api_base_url)
-        self.timeout.setValue(self.config.api_timeout)
-        self.remember_server.setChecked(self.config.remember_server)
-        
-        # UI settings
-        self.theme.setCurrentText(self.config.theme.capitalize())
-        self.remember_email.setChecked(self.config.remember_email)
-        
-        # Security settings
-        self.token_refresh.setValue(self.config.token_refresh_interval)
-        self.session_timeout.setValue(self.config.session_timeout)
+    def on_theme_changed(self, theme_name):
+        """Handle theme change"""
+        self.config.theme = theme_name.lower()
+    
+    def on_timeout_changed(self, value):
+        """Handle session timeout change"""
+        self.config.session_timeout = value
+    
+    def on_api_timeout_changed(self, value):
+        """Handle API timeout change"""
+        self.config.api_timeout = value
     
     def save_settings(self):
-        """Save settings to config object"""
-        # Server settings
-        self.config.api_base_url = self.server_url.text().strip()
-        self.config.api_timeout = self.timeout.value()
-        self.config.remember_server = self.remember_server.isChecked()
-        
-        # UI settings
-        self.config.theme = self.theme.currentText().lower()
-        self.config.remember_email = self.remember_email.isChecked()
-        
-        # Security settings
-        self.config.token_refresh_interval = self.token_refresh.value()
-        self.config.session_timeout = self.session_timeout.value()
-        
-        # Save to file
+        """Save settings to configuration"""
         self.config.save()
+        self.save_btn.setText("Settings Saved!")
+        self.save_btn.setDisabled(True)
         
-        # Emit signal
-        self.config_changed.emit()
-        
-        # Show success message
-        QMessageBox.information(self, "Settings", "Settings saved successfully")
+        # Reset button after delay
+        QTimer.singleShot(2000, lambda: (
+            self.save_btn.setText("Save Settings"),
+            self.save_btn.setEnabled(True)
+        ))
     
-    def reset_settings(self):
-        """Reset settings to defaults"""
-        # Ask for confirmation
-        reply = QMessageBox.question(
-            self, "Reset Settings",
-            "Are you sure you want to reset all settings to default values?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            # Create new config with defaults
-            self.config = AppConfig()
+    @async_callback
+    async def test_server_connection(self):
+        """Test connection to server"""
+        try:
+            # Test connection by getting salt (requires authentication)
+            await self.api_client.get_vault_salt()
             
-            # Load into UI
-            self.load_settings()
-            
-            # Show confirmation
-            QMessageBox.information(self, "Settings", "Settings reset to defaults")
-            
-            # Note: We don't save to disk until user clicks Save
+            # Show success message
+            QMessageBox.information(
+                self, "Connection Test",
+                "Server connection successful!",
+                QMessageBox.StandardButton.Ok
+            )
+        except Exception as e:
+            # Show error message
+            QMessageBox.critical(
+                self, "Connection Test",
+                f"Connection failed: {str(e)}",
+                QMessageBox.StandardButton.Ok
+            )
+
+# Fix QMessageBox and QTimer imports
+from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import QTimer

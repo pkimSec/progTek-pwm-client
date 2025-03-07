@@ -1,116 +1,120 @@
 from PyQt6.QtWidgets import QProgressBar, QWidget, QHBoxLayout, QLabel
-from PyQt6.QtCore import Qt
-import re
+from PyQt6.QtCore import Qt, pyqtSlot
+
+try:
+    import zxcvbn
+    HAS_ZXCVBN = True
+except ImportError:
+    HAS_ZXCVBN = False
+    print("zxcvbn not available, using basic password strength estimation")
 
 class PasswordStrengthMeter(QWidget):
-    """Widget for measuring and displaying password strength"""
+    """Widget to display password strength"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.strength_level = 0  # 0-4 strength scale
         self.setup_ui()
     
     def setup_ui(self):
-        """Initialize the user interface"""
+        """Set up the user interface"""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Progress bar for visual representation
+        # Progress bar for strength visualization
         self.progress = QProgressBar()
-        self.progress.setRange(0, 4)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
         layout.addWidget(self.progress, 3)
         
-        # Label for text description
-        self.label = QLabel("Very Weak")
+        # Label for strength text
+        self.label = QLabel("Weak")
+        self.label.setMinimumWidth(80)
         layout.addWidget(self.label, 1)
         
-        # Apply initial styling
-        self.update_styling(0)
+        # Set initial state
+        self.update_strength("")
     
+    @pyqtSlot(str)
     def update_strength(self, password: str):
-        """
-        Update the strength meter based on the password
-        Implements a basic strength algorithm
-        """
+        """Update meter based on password strength"""
         if not password:
             strength = 0
-            description = "Very Weak"
+            text = "None"
+            color = "gray"
+        elif HAS_ZXCVBN:
+            # Use zxcvbn for better password strength estimation
+            result = zxcvbn.zxcvbn(password)
+            score = result['score']  # 0-4 score
+            
+            # Convert to percentage and text
+            strength = (score / 4) * 100
+            
+            if score == 0:
+                text = "Very Weak"
+                color = "red"
+            elif score == 1:
+                text = "Weak"
+                color = "orangered"
+            elif score == 2:
+                text = "Moderate"
+                color = "orange"
+            elif score == 3:
+                text = "Strong"
+                color = "yellowgreen"
+            else:  # score == 4
+                text = "Very Strong"
+                color = "green"
+                
         else:
-            # Start with length-based score
-            strength = 0
-            
-            # Check length
-            if len(password) >= 8:
-                strength += 1
-            if len(password) >= 12:
-                strength += 1
+            # Basic strength calculation without zxcvbn
+            if len(password) < 8:
+                strength = 25
+                text = "Weak"
+                color = "red"
+            elif len(password) < 12:
+                # Check for complexity
+                has_upper = any(c.isupper() for c in password)
+                has_lower = any(c.islower() for c in password)
+                has_digit = any(c.isdigit() for c in password)
+                has_special = any(not c.isalnum() for c in password)
                 
-            # Check complexity with regex
-            has_lowercase = bool(re.search(r'[a-z]', password))
-            has_uppercase = bool(re.search(r'[A-Z]', password))
-            has_digit = bool(re.search(r'\d', password))
-            has_special = bool(re.search(r'[^A-Za-z0-9]', password))
-            
-            # Add points for character variety
-            if has_lowercase and has_uppercase:
-                strength += 1
-            if has_digit:
-                strength += 0.5
-            if has_special:
-                strength += 0.5
+                complexity = sum([has_upper, has_lower, has_digit, has_special])
                 
-            # Ensure strength is an integer between 0-4
-            strength = min(4, int(strength))
-            
-            # Set description based on strength level
-            if strength <= 1:
-                description = "Very Weak"
-            elif strength == 2:
-                description = "Weak"
-            elif strength == 3:
-                description = "Moderate"
+                if complexity < 2:
+                    strength = 25
+                    text = "Weak"
+                    color = "red"
+                elif complexity < 3:
+                    strength = 50
+                    text = "Moderate"
+                    color = "orange"
+                else:
+                    strength = 75
+                    text = "Strong"
+                    color = "yellowgreen"
             else:
-                description = "Strong"
+                # Check for complexity in longer passwords
+                has_upper = any(c.isupper() for c in password)
+                has_lower = any(c.islower() for c in password)
+                has_digit = any(c.isdigit() for c in password)
+                has_special = any(not c.isalnum() for c in password)
+                
+                complexity = sum([has_upper, has_lower, has_digit, has_special])
+                
+                if complexity < 3:
+                    strength = 75
+                    text = "Strong"
+                    color = "yellowgreen"
+                else:
+                    strength = 100
+                    text = "Very Strong"
+                    color = "green"
         
-        # Update the progress bar and label
-        self.strength_level = strength
-        self.progress.setValue(strength)
-        self.label.setText(description)
-        self.update_styling(strength)
-    
-    def update_styling(self, strength: int):
-        """Update the styling based on strength level"""
-        # Define colors for different strength levels
-        colors = [
-            "#FF3B30",  # Red - Very Weak
-            "#FF9500",  # Orange - Weak
-            "#FFCC00",  # Yellow - Moderate
-            "#34C759"   # Green - Strong
-        ]
+        # Update UI
+        self.progress.setValue(int(strength))
+        self.label.setText(text)
         
-        # Apply color to progress bar
-        if strength == 0:
-            color = colors[0]
-        else:
-            color = colors[min(strength - 1, 3)]
-            
-        # Create stylesheet
-        style = f"""
-            QProgressBar {{
-                border: 1px solid #ccc;
-                border-radius: 2px;
-                background-color: #f5f5f5;
-                text-align: center;
-            }}
-            
-            QProgressBar::chunk {{
-                background-color: {color};
-            }}
-        """
-        
-        self.progress.setStyleSheet(style)
-        
-        # Apply text color to label
-        self.label.setStyleSheet(f"color: {color};")
+        # Set color based on strength
+        stylesheet = f"QProgressBar::chunk {{ background-color: {color}; }}"
+        self.progress.setStyleSheet(stylesheet)
