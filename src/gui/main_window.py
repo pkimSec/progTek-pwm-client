@@ -20,10 +20,15 @@ class MainWindow(QMainWindow):
     logout_requested = pyqtSignal()
     
     def __init__(self, api_client: APIClient, user_session: UserSession, config: AppConfig, parent=None):
+        print("MainWindow initialization starting")
         super().__init__(parent)
         self.api_client = api_client
         self.user_session = user_session
         self.config = config
+        
+        # Verify we have valid data
+        if not api_client or not user_session:
+            print("WARNING: MainWindow initialized with invalid api_client or user_session")
         
         # Timer for session inactivity monitoring
         self.inactivity_timer = QTimer(self)
@@ -40,6 +45,7 @@ class MainWindow(QMainWindow):
         
         # Initialize UI
         self.setup_ui()
+        print("MainWindow initialization complete")
         
         # Start timers
         self.inactivity_timer.start()
@@ -112,15 +118,31 @@ class MainWindow(QMainWindow):
     
     def center_window(self):
         """Center window on screen - called after the window has its final size"""
-        screen_geometry = self.screen().availableGeometry()
-        frame_geometry = self.frameGeometry()
-        
-        # Center the window's frame geometry in the available screen space
-        frame_geometry.moveCenter(screen_geometry.center())
-        self.move(frame_geometry.topLeft())
+        try:
+            screen_geometry = self.screen().availableGeometry()
+            frame_geometry = self.frameGeometry()
+            
+            # Center the window's frame geometry in the available screen space
+            center_point = screen_geometry.center()
+            frame_geometry.moveCenter(center_point)
+            
+            print(f"Centering window: screen center={center_point.x()},{center_point.y()}, "
+                  f"moving to {frame_geometry.topLeft().x()},{frame_geometry.topLeft().y()}")
+                  
+            self.move(frame_geometry.topLeft())
+        except Exception as e:
+            print(f"Error centering window: {str(e)}")
+
+    def showEvent(self, event):
+        """Handle window show event"""
+        super().showEvent(event)
+        print(f"MainWindow shown: size={self.width()}x{self.height()}, pos={self.x()},{self.y()}")
+        # Center window after it's shown
+        QTimer.singleShot(10, self.center_window)
     
     def handle_logout(self):
         """Handle logout action"""
+        print("MainWindow: Logout requested")
         reply = QMessageBox.question(
             self, "Logout Confirmation",
             "Are you sure you want to log out?",
@@ -129,15 +151,20 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            # Stop timers
+            print("MainWindow: Logout confirmed")
+            # Stop timers first
             self.inactivity_timer.stop()
             self.token_refresh_timer.stop()
             
-            # Perform API logout
-            self.logout_api()
+            # Store window size
+            self.config.window_width = self.width()
+            self.config.window_height = self.height()
+            self.config.save()
             
             # Emit logout signal
             self.logout_requested.emit()
+        else:
+            print("MainWindow: Logout canceled")
     
     @async_callback
     async def logout_api(self):
@@ -223,3 +250,5 @@ class MainWindow(QMainWindow):
         
         # Accept close event
         event.accept()
+        
+        print("MainWindow closed")

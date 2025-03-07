@@ -1,6 +1,7 @@
 import aiohttp
 import json
 import asyncio
+import weakref
 from typing import Optional, Dict, Any, Union, ClassVar
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -10,6 +11,9 @@ from .models import (
     LoginRequest, LoginResponse, RegisterRequest,
     PasswordEntry, EntryVersion, APIError
 )
+
+# Global session tracker
+_active_sessions = set()
 
 class APIClient:
     """Asynchronous API client for password manager server"""
@@ -28,9 +32,12 @@ class APIClient:
         self._rate_limit_reset: Optional[datetime] = None   
         self._master_password: Optional[str] = None  # Store master password for vault operations
         self._user_email: Optional[str] = None  # Store user email for reconnection
+        self._is_closing = False  # Flag to prevent multiple close attempts
         
         # Cache this instance by base_url for reuse
         APIClient._instance_cache[base_url] = self
+        
+        print(f"Created new APIClient for {base_url}")
 
     @classmethod
     def get_instance(cls, base_url: str) -> 'APIClient':
@@ -38,12 +45,21 @@ class APIClient:
         if base_url in cls._instance_cache:
             return cls._instance_cache[base_url]
         return cls(base_url)
+    
+    @classmethod
+    def clear_all_instances(cls):
+        """Clear all cached instances"""
+        print(f"Clearing {len(cls._instance_cache)} APIClient instances")
+        cls._instance_cache.clear()
 
     async def ensure_session(self):
         """Ensure we have a valid session"""
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
             self.session = aiohttp.ClientSession(timeout=timeout)
+            # Track the session
+            _active_sessions.add(weakref.ref(self.session, lambda _: _active_sessions.discard(_)))
+            print(f"Created new session, total active: {len(_active_sessions)}")
 
     @property
     def is_authenticated(self) -> bool:
@@ -72,14 +88,32 @@ class APIClient:
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
             self.session = aiohttp.ClientSession(timeout=timeout)
+            # Track the session
+            _active_sessions.add(weakref.ref(self.session, lambda _: _active_sessions.discard(_)))
+            print(f"Created new session, total active: {len(_active_sessions)}")
             print("Session created successfully")
 
     async def close(self):
         """Close the session"""
+        if self._is_closing:
+            print("Close already in progress, skipping")
+            return
+            
+        self._is_closing = True
+        print(f"Closing API client session for {self.endpoints.base_url}")
+        
         if self.session and not self.session.closed:
-            await self.session.close()
-            self.session = None
-
+            try:
+                print(f"Closing session {id(self.session)}")
+                await self.session.close()
+                print("Session closed successfully")
+            except Exception as e:
+                print(f"Error closing session: {str(e)}")
+            finally:
+                self.session = None
+                
+        self._is_closing = False
+                
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers including auth token if available"""
         headers = {
@@ -202,19 +236,23 @@ class APIClient:
 
     async def logout(self):
         """Log out user and clear session"""
+        print(f"Logging out session {id(self) if self else 'None'}")
         if self.session and not self.session.closed:
             try:
                 await self._request('POST', self.endpoints.logout)
+                print("Logout API request completed")
             except Exception as e:
-                print(f"Error during logout: {str(e)}")
+                print(f"Error during logout request: {str(e)}")
             finally:
                 self._access_token = None
                 self._session_token = None
                 self._token_expires_at = None
                 self._master_password = None
                 self._user_email = None
-                await self.session.close()
-                self.session = None
+                await self.close()
+                print("Logout cleanup complete")
+        else:
+            print("No active session to logout")
 
     async def register(self, email: str, password: str, invite_code: str):
         """Register new user"""

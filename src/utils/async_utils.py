@@ -3,7 +3,6 @@ from functools import wraps
 from typing import Callable, Any
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 import traceback
-from PyQt6 import sip
 
 class AsyncRunner(QObject):
     """Utility class to run async functions from Qt"""
@@ -41,16 +40,31 @@ def async_callback(func: Callable) -> Callable:
                 result = await func(self, *args, **kwargs)
                 return result
             except Exception as e:
-                # Check if the object still exists before handling the error
-                if hasattr(self, 'handle_error') and not sip.isdeleted(self):
+                if hasattr(self, 'handle_error'):
                     self.handle_error(e)
                 else:
-                    print(f"Error in async callback: {e}")
-                    traceback.print_exc()
+                    raise e
         
-        # Store a reference to self in the runner to prevent premature garbage collection
-        runner = AsyncRunner(self)
-        runner.self_ref = self  # Keep reference to self
+        # Check if self is a QObject before using as parent
+        if isinstance(self, QObject):
+            runner = AsyncRunner(self)
+        else:
+            # Use no parent if self is not a QObject
+            runner = AsyncRunner()
+            
         QTimer.singleShot(0, lambda: runner.run(async_func()))
         
     return wrapper
+
+def standalone_async_task(func: Callable, *args, **kwargs) -> None:
+    """Run an async function without needing a QObject instance"""
+    async def async_func():
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            print(f"Error in standalone_async_task: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    runner = AsyncRunner()  # No parent
+    QTimer.singleShot(0, lambda: runner.run(async_func()))
