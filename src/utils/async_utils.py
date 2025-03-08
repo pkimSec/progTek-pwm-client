@@ -58,12 +58,12 @@ def async_callback(func: Callable) -> Callable:
                     self.show_error(e)
                 else:
                     # If no error handler, re-raise in main thread via QTimer
-                    def show_error_dialog():
+                    def show_error_dialog(error_msg=str(e)):
                         from PyQt6.QtWidgets import QMessageBox
                         QMessageBox.critical(
                             None, 
                             "Error", 
-                            f"An error occurred: {str(e)}"
+                            f"An error occurred: {error_msg}"
                         )
                     QTimer.singleShot(0, show_error_dialog)
         

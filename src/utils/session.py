@@ -15,11 +15,12 @@ class UserSession:
         self.role = role
         self.access_token = access_token
         self.session_token = session_token
-        self.master_password = master_password  # Store master password for vault operations
+        self._master_password = master_password  # Store master password temporarily
         self._user_email = email  # Store email for display
         self.created_at = datetime.now()
         self.last_activity = datetime.now()
         self.is_active = True
+        self.vault_salt = None  # Store salt for vault unlocking
     
     @property
     def is_admin(self) -> bool:
@@ -31,9 +32,32 @@ class UserSession:
         """Get session age"""
         return datetime.now() - self.created_at
     
+    @property
+    def master_password(self) -> Optional[str]:
+        """Get master password (for vault unlocking only)"""
+        return self._master_password
+    
+    @master_password.setter
+    def master_password(self, value: str):
+        """Set master password"""
+        self._master_password = value
+        
+        # When setting a new master password, also try to unlock the vault
+        if value and self.vault_salt:
+            try:
+                from crypto.vault import get_vault
+                vault = get_vault()
+                vault.unlock(value, self.vault_salt)
+            except Exception as e:
+                print(f"Error unlocking vault with new master password: {e}")
+    
     def update_activity(self):
         """Update last activity timestamp"""
         self.last_activity = datetime.now()
+    
+    def set_vault_salt(self, salt: str):
+        """Set vault salt"""
+        self.vault_salt = salt
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert session to dictionary (for storage)"""
@@ -45,7 +69,8 @@ class UserSession:
             'user_email': self._user_email,
             'created_at': self.created_at.isoformat(),
             'last_activity': self.last_activity.isoformat(),
-            'is_active': self.is_active
+            'is_active': self.is_active,
+            'vault_salt': self.vault_salt  # Store salt for reuse
             # Note: master_password is intentionally not saved to disk for security
         }
     
@@ -63,6 +88,7 @@ class UserSession:
         session.created_at = datetime.fromisoformat(data['created_at'])
         session.last_activity = datetime.fromisoformat(data['last_activity'])
         session.is_active = data['is_active']
+        session.vault_salt = data.get('vault_salt')  # Get saved vault salt
         return session
     
     def save(self, config_dir: Path) -> None:
@@ -102,3 +128,8 @@ class UserSession:
         
         if session_file.exists():
             os.remove(session_file)
+            
+    def clear_sensitive_data(self):
+        """Clear sensitive data from memory"""
+        # Clear master password
+        self._master_password = None

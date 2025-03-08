@@ -1,9 +1,11 @@
 from PyQt6.QtWidgets import (
-    QMainWindow, QTabWidget, QWidget, QVBoxLayout, QLabel,
+    QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QLabel,
     QStatusBar, QToolBar, QMessageBox, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, QTimer  
+from PyQt6.QtCore import pyqtSignal, QTimer, QEvent  
 from PyQt6.QtGui import QAction 
+
+from datetime import datetime
 
 from api.client import APIClient
 from utils.config import AppConfig
@@ -25,31 +27,67 @@ class MainWindow(QMainWindow):
         self.api_client = api_client
         self.user_session = user_session
         self.config = config
-        
+
         # Verify it is valid data
         if not api_client or not user_session:
             print("WARNING: MainWindow initialized with invalid api_client or user_session")
-        
+
         # Timer for session inactivity monitoring
         self.inactivity_timer = QTimer(self)
         self.inactivity_timer.timeout.connect(self.check_inactivity)
         self.inactivity_timer.setInterval(60000)  # Check every minute
-        
+
         # Timer for token refresh
         self.token_refresh_timer = QTimer(self)
         self.token_refresh_timer.timeout.connect(self.refresh_token)
         self.token_refresh_timer.setInterval(45 * 60 * 1000)  # 45 minutes
-        
+
         # Last activity timestamp
-        self.last_activity = None
-        
+        self.last_activity_time = datetime.now()
+
+        # Setup activity tracking
+        self.setup_activity_tracking()
+
         # Initialize UI
         self.setup_ui()
         print("MainWindow initialization complete")
-        
+
         # Start timers
         self.inactivity_timer.start()
         self.token_refresh_timer.start()
+
+        # Initialize vault state
+        self.initialize_vault()
+
+    def initialize_vault(self):
+        """Initialize vault with master password and salt"""
+        try:
+            from crypto.vault import get_vault
+            
+            # Get master password and salt
+            master_password = self.user_session.master_password
+            vault_salt = self.user_session.vault_salt
+            
+            # If we don't have a salt yet, we need to get it from the server
+            if not vault_salt:
+                print("No vault salt available, attempting to retrieve from server")
+                # This will be executed asynchronously
+                self.get_vault_salt()
+                return
+            
+            # Initialize vault
+            vault = get_vault()
+            if master_password and vault_salt:
+                if vault.unlock(master_password, vault_salt):
+                    print("Vault unlocked successfully")
+                else:
+                    print("Failed to unlock vault")
+            else:
+                print("Missing master password or salt")
+        except Exception as e:
+            print(f"Error initializing vault: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def setup_ui(self):
         """Initialize user interface"""
@@ -139,6 +177,37 @@ class MainWindow(QMainWindow):
         print(f"MainWindow shown: size={self.width()}x{self.height()}, pos={self.x()},{self.y()}")
         # Center window after it's shown
         QTimer.singleShot(10, self.center_window)
+
+    def setup_activity_tracking(self):
+        """Setup event filters to track user activity"""
+        # Install event filter on application
+        QApplication.instance().installEventFilter(self)
+    
+        # Also track child widgets
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        """Event filter to track user activity"""
+        # These event types indicate user activity
+        activity_events = [
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseMove,
+            QEvent.Type.KeyPress,
+            QEvent.Type.KeyRelease
+        ]
+        
+        if event.type() in activity_events:
+            self.update_activity()
+        
+        # Let the event propagate
+        return super().eventFilter(watched, event)
+
+    def update_activity(self):
+        """Update activity timestamp"""
+        self.last_activity_time = datetime.now()
+        self.user_session.update_activity()
     
     def handle_logout(self):
         """Handle logout action"""
@@ -181,6 +250,11 @@ class MainWindow(QMainWindow):
         self.config.window_height = self.height()
         self.config.save()
         
+        # Lock the vault in crypto module
+        from crypto.vault import get_vault
+        vault = get_vault()
+        vault.lock()
+        
         # Hide window
         self.hide()
         
@@ -188,13 +262,20 @@ class MainWindow(QMainWindow):
         master_dlg = MasterPasswordDialog(self)
         if master_dlg.exec():
             # User entered master password
-            master_password = master_dlg.get_password()
+            entered_password = master_dlg.get_password()
             
-            # Verify password (it should match the one stored in session)
-            if master_password == self.user_session.master_password:
-                # Password correct - show window
+            # Check if entered password matches the one used for login
+            # This is the simplest solution - just compare with the stored password
+            if entered_password == self.user_session.master_password:
+                # Password is correct, unlock the vault
+                vault.unlock(entered_password, self.user_session.vault_salt)
+                
+                # Show window
                 self.show()
                 self.status_bar.showMessage("Vault unlocked", 3000)
+                
+                # Update last activity time
+                self.update_activity()
             else:
                 # Password incorrect
                 QMessageBox.critical(
@@ -210,18 +291,19 @@ class MainWindow(QMainWindow):
     
     def check_inactivity(self):
         """Check for user inactivity"""
-        if self.last_activity is None:
-            # Initialize last activity
-            self.last_activity = self.user_session.last_activity
-            return
-        
         # Get session timeout (in minutes)
         session_timeout = self.config.session_timeout
         
-        # Check if session has been inactive for too long
-        inactive_time = (self.user_session.last_activity - self.last_activity).total_seconds() / 60
+        # Calculate inactivity time in minutes
+        now = datetime.now()
+        inactive_time = (now - self.last_activity_time).total_seconds() / 60
+        
+        print(f"Checking inactivity: {inactive_time:.2f} minutes of {session_timeout} allowed")
+        
+        # Check if inactive for too long
         if inactive_time >= session_timeout:
-            # Session inactive for too long - lock vault
+            print(f"Inactivity detected ({inactive_time:.2f} minutes). Locking vault.")
+            # Lock vault
             self.lock_vault()
     
     @async_callback
@@ -236,6 +318,23 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error refreshing token: {str(e)}")
             self.status_bar.showMessage("Session refresh failed", 3000)
+
+    @async_callback
+    async def get_vault_salt(self):
+        """Get vault salt from server"""
+        try:
+            salt = await self.api_client.get_vault_salt()
+            print(f"Retrieved vault salt: {salt}")
+            
+            # Store salt in session
+            self.user_session.set_vault_salt(salt)
+            
+            # Now initialize vault
+            self.initialize_vault()
+        except Exception as e:
+            print(f"Error getting vault salt: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def closeEvent(self, event):
         """Handle window close event"""
