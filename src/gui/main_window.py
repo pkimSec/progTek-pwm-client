@@ -2,8 +2,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QLabel,
     QStatusBar, QToolBar, QMessageBox, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtCore import pyqtSignal, QTimer  
+from PyQt6.QtGui import QAction 
 
 from api.client import APIClient
 from utils.config import AppConfig
@@ -26,7 +26,7 @@ class MainWindow(QMainWindow):
         self.user_session = user_session
         self.config = config
         
-        # Verify we have valid data
+        # Verify it is valid data
         if not api_client or not user_session:
             print("WARNING: MainWindow initialized with invalid api_client or user_session")
         
@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         """Refresh authentication token"""
         try:
             # The API client will handle token refresh automatically
-            # on the next request, but we can trigger a simple request here
+            # on the next request, but triggering a simple request here
             # to ensure the token stays fresh
             await self.api_client.get_vault_salt()
             self.status_bar.showMessage("Session refreshed", 3000)

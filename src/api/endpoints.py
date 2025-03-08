@@ -26,6 +26,13 @@ class APIEndpoints:
         return self._url('/api/register')
 
     @property
+    def users(self) -> str:
+        return self._url('/api/users')
+
+    def user(self, user_id: int) -> str:
+        return self._url(f'/api/users/{user_id}')
+
+    @property
     def create_invite(self) -> str:
         return self._url('/api/invite')
 

@@ -45,6 +45,13 @@ class EntryVersion(BaseModel):
     encrypted_data: str
     created_at: datetime
 
+class User(BaseModel):
+    id: int
+    email: str
+    role: str
+    is_active: bool
+    created_at: Optional[str] = None
+
 class APIError(Exception):
     def __init__(self, message: str, status_code: int):
         self.message = message
