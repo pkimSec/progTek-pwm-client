@@ -56,12 +56,23 @@ class APIClient:
 
     async def ensure_session(self):
         """Ensure its a valid session"""
+        print(f"Ensuring session for {self.endpoints.base_url}")
         if self.session is None or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=30)
-            self.session = aiohttp.ClientSession(timeout=timeout)
-            # Track the session
-            _active_sessions.add(weakref.ref(self.session, lambda _: _active_sessions.discard(_)))
-            print(f"Created new session, total active: {len(_active_sessions)}")
+            print("Session is None or closed, creating new session")
+            try:
+                timeout = aiohttp.ClientTimeout(total=30)
+                self.session = aiohttp.ClientSession(timeout=timeout)
+            
+                # Track the session
+                _active_sessions.add(weakref.ref(self.session, lambda _: _active_sessions.discard(_)))
+                print(f"Created new session, total active: {len(_active_sessions)}")
+            except Exception as e:
+                print(f"Error creating session: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                raise
+        else:
+            print("Using existing session")
 
     @property
     def is_authenticated(self) -> bool:
@@ -124,7 +135,7 @@ class APIClient:
             
         self._is_closing = True
         print(f"Closing API client session for {self.endpoints.base_url}")
-        
+    
         if self.session and not self.session.closed:
             try:
                 print(f"Closing session {id(self.session)}")
@@ -132,10 +143,33 @@ class APIClient:
                 print("Session closed successfully")
             except Exception as e:
                 print(f"Error closing session: {str(e)}")
+                import traceback
+                traceback.print_exc()
             finally:
                 self.session = None
-                
+            
         self._is_closing = False
+
+    def sync_close(self):
+        """Synchronous version of close method for cleanup operations"""
+        print(f"Synchronous close of API client for {self.endpoints.base_url}")
+        if self.session and not self.session.closed:
+            try:
+                # Create an event loop if needed
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # Run close operation
+                loop.run_until_complete(self.close())
+                print("Session closed successfully (sync)")
+            except Exception as e:
+                print(f"Error in sync_close: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers including auth token if available"""
@@ -187,10 +221,17 @@ class APIClient:
         retry_auth: bool = True
     ) -> Any:
         """Make HTTP request to API with optional token refresh"""
+        print(f"=== API Request: {method} {url} ===")
         await self.ensure_session()
 
         try:
+            print(f"Preparing headers, auth included: {include_auth}")
             headers = self._get_headers(include_auth)
+            print(f"Headers: {headers}")
+            if data:
+                print(f"Request data: {data}")
+            
+            print(f"Sending request to: {url}")
             async with self.session.request(
                 method=method,
                 url=url,
@@ -198,6 +239,8 @@ class APIClient:
                 headers=headers,
                 ssl=False  # Disable SSL verification for local development
             ) as response:
+                print(f"Response status: {response.status}")
+                
                 # Update rate limit info
                 self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
                 reset_time = response.headers.get('X-RateLimit-Reset')
@@ -220,23 +263,37 @@ class APIClient:
                         # Let the original 401 error propagate
 
                 try:
-                    data = await response.json()
-                except json.JSONDecodeError:
-                    data = await response.text()
+                    print("Reading response content")
+                    try:
+                        data = await response.json()
+                        print(f"JSON response: {data}")
+                    except json.JSONDecodeError:
+                        data = await response.text()
+                        print(f"Text response: {data}")
 
-                if not response.ok:
-                    raise APIError(
-                        message=data.get('message', 'Unknown error'),
-                        status_code=response.status
-                    )
+                    if not response.ok:
+                        print(f"Error response - Status: {response.status}, Message: {data}")
+                        raise APIError(
+                            message=data.get('message', 'Unknown error'),
+                            status_code=response.status
+                        )
 
-                return data
+                    return data
+                except Exception as e:
+                    print(f"Error processing response: {str(e)}")
+                    raise
                 
         except aiohttp.ClientError as e:
+            print(f"Network error: {str(e)}")
             raise APIError(
                 message=f"Network error: {str(e)}",
                 status_code=0
             )
+        except Exception as e:
+            print(f"Unexpected error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     async def login(self, email: str, password: str) -> LoginResponse:
         """Log in user and get access token"""
@@ -278,13 +335,53 @@ class APIClient:
             print("No active session to logout")
 
     async def register(self, email: str, password: str, invite_code: str):
-        """Register new user"""
-        data = RegisterRequest(
-            email=email,
-            password=password,
-            invite_code=invite_code
-        ).model_dump()
-        return await self._request('POST', self.endpoints.register, data, include_auth=False)
+        """
+        Register new user with invite code
+    
+        Parameters:
+        email (str): User's email address
+        password (str): User's password
+        invite_code (str): Invite code provided by admin
+    
+        Returns:
+        dict: Registration response data
+    
+        Raises:
+        APIError: If registration fails
+        """
+        data = {
+            "email": email,
+            "password": password,
+            "invite_code": invite_code
+        }
+    
+        try:
+            await self.ensure_session()
+        
+            # Debug logging
+            print(f"Sending registration request to: {self.endpoints.register}")
+            print(f"Registration data: {data}")
+        
+            # Make the API request
+            response = await self._request(
+                'POST', 
+                self.endpoints.register, 
+                data, 
+                include_auth=False,  # No auth needed for registration
+                retry_auth=False     # Don't retry auth for registration
+            )
+        
+            print(f"Registration response: {response}")
+            return response
+        
+        except aiohttp.ClientError as e:
+            error_msg = f"Network error during registration: {str(e)}"
+            print(error_msg)
+            raise APIError(message=error_msg, status_code=0)
+        except Exception as e:
+            error_msg = f"Error during registration: {str(e)}"
+            print(error_msg)
+            raise
 
     async def list_users(self) -> List[Dict[str, Any]]:
         """Get list of all users (admin only)"""

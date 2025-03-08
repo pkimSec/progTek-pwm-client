@@ -2,7 +2,7 @@ import sys
 import asyncio
 import os
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QDialog
 from PyQt6.QtCore import Qt, QTimer, QObject
 
 from gui.dialogs.login import LoginDialog
@@ -36,6 +36,8 @@ class PasswordManagerApp(QObject):
         self.user_session = None
         self.session_timer = QTimer()  # Timer for session checks
         self.login_dialog = None  # Reference to login dialog
+        self.registered_email = None  # Store email from registration
+        self.is_registering = False  # Flag to track registration state
         
         # Setup session check timer
         self.session_timer.timeout.connect(self.check_session)
@@ -174,47 +176,125 @@ class PasswordManagerApp(QObject):
     
     def show_login_dialog(self):
         """Show login dialog"""
-        # Create a fresh login dialog each time
+        # First, close any existing login dialog
+        if self.login_dialog is not None:
+            try:
+                print("Closing existing login dialog")
+                self.login_dialog.hide()
+                self.login_dialog.close()
+                self.login_dialog.deleteLater()
+            except Exception as e:
+                print(f"Error closing existing login dialog: {str(e)}")
+            # Clear the reference
+            self.login_dialog = None
+
+        # Create a fresh login dialog
         print("Creating new LoginDialog instance")
         self.login_dialog = LoginDialog(self.config)
         self.login_dialog.login_successful.connect(self.handle_login_success)
         self.login_dialog.register_clicked.connect(self.show_register_dialog)
-        
-        if self.login_dialog.exec():
-            # Dialog was accepted (login successful)
-            pass
-        else:
-            # User canceled - exit application
-            print("Login dialog canceled - exiting application")
-            sys.exit(0)
+
+        # Set the email if we have one from registration
+        if self.registered_email:
+            print(f"Setting email from previous registration: {self.registered_email}")
+            self.login_dialog.email.setText(self.registered_email)
+            # Also focus on password field
+            self.login_dialog.password.setFocus()
+
+        # Show the dialog
+        print("Showing login dialog")
+        result = self.login_dialog.exec()
+        print(f"Login dialog exec result: {result}")
+
+        # If dialog was rejected and we're not registering, exit
+        if result == QDialog.DialogCode.Rejected and not self.is_registering:
+            print("Login dialog rejected, exiting application")
+            self.qapp.quit()
     
     def show_register_dialog(self):
         """Show registration dialog"""
-        # Get API client from login dialog
-        api_client = APIClient(self.config.api_base_url)
-        register_dialog = RegisterDialog(api_client, self.config)
-        register_dialog.registration_successful.connect(self.handle_registration_success)
+        print("Showing registration dialog")
+        # Set the registration flag
+        self.is_registering = True
         
-        register_dialog.exec()
+        try:
+            # Get API client from login dialog
+            server_url = self.config.api_base_url
+            if self.login_dialog and hasattr(self.login_dialog, 'server_url'):
+                server_url = self.login_dialog.server_url.text().strip()
+            
+            # Create a fresh API client for registration
+            api_client = APIClient(server_url)
+            
+            # Create register dialog
+            register_dialog = RegisterDialog(api_client, self.config)
+            register_dialog.registration_successful.connect(self.handle_registration_success)
+            
+            # Execute dialog
+            result = register_dialog.exec()
+            
+            # Clean up API client
+            if api_client and hasattr(api_client, 'session') and api_client.session:
+                try:
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(api_client.close())
+                    loop.close()
+                    print("Successfully closed API client session after registration")
+                except Exception as e:
+                    print(f"Error closing API client: {str(e)}")
+            
+            # If cancelled, clear registration flag and show login dialog again
+            if not result:
+                print("Registration cancelled by user")
+                self.is_registering = False
+                self.show_login_dialog()
+                
+        except Exception as e:
+            print(f"Error in show_register_dialog: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Clear the registration flag
+            self.is_registering = False
+            # Show login dialog again
+            self.show_login_dialog()
     
     def handle_registration_success(self, email: str):
         """Handle successful registration"""
-        # Show success message and pre-fill login dialog with email
-        login_dialog = LoginDialog(self.config)
-        login_dialog.login_successful.connect(self.handle_login_success)
-        login_dialog.email.setText(email)
+        print(f"Handling registration success for email: {email}")
         
-        if login_dialog.exec():
-            # Dialog was accepted (login successful)
-            pass
-        else:
-            # User canceled - exit application
-            sys.exit(0)
+        # Store registered email
+        self.registered_email = email
+        
+        # Schedule the creation of a new login dialog
+        QTimer.singleShot(500, self.create_new_login_dialog)
+    
+    def create_new_login_dialog(self):
+        """Create a new login dialog after registration"""
+        try:
+            print("Creating new login dialog after registration")
+            # Clear registration flag now that we're showing the login dialog
+            self.is_registering = False
+            self.show_login_dialog()
+            
+        except Exception as e:
+            print(f"Error creating new login dialog: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Exit application if we can't show the login dialog
+            self.qapp.quit()
     
     def handle_login_success(self, response: LoginResponse, master_password: str):
         """Handle successful login"""
         print(f"Login successful for user: {response.user_id}")
-        
+
+        # Store the login dialog reference to close it later
+        login_dialog_to_close = self.login_dialog
+
+        # Clear the login dialog reference immediately to prevent multiple instances
+        self.login_dialog = None
+
         # Close any existing main window before creating new resources
         if self.main_window:
             print("Closing existing main window before creating new session")
@@ -223,26 +303,26 @@ class PasswordManagerApp(QObject):
             except Exception as e:
                 print(f"Error closing existing window: {str(e)}")
             self.main_window = None
-        
+
         # Create API client with token
         print("Creating new API client with fresh token")
         self.api_client = APIClient(self.config.api_base_url)
         self.api_client._access_token = response.access_token
         self.api_client.set_master_password(master_password)
-        
+    
         # Save the email from the login dialog
-        if self.login_dialog and hasattr(self.login_dialog, 'email'):
-            user_email = self.login_dialog.email.text().strip()
+        user_email = None
+        if login_dialog_to_close and hasattr(login_dialog_to_close, 'email'):
+            user_email = login_dialog_to_close.email.text().strip()
             self.api_client._user_email = user_email
             print(f"Using email from login dialog: {user_email}")
         else:
-            user_email = None
             print("No email from login dialog")
             
         # Create user session
         config_dir = Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config')
         config_dir = config_dir / 'password_manager'
-        
+    
         print("Creating new user session")
         self.user_session = UserSession(
             user_id=response.user_id,
@@ -253,9 +333,24 @@ class PasswordManagerApp(QObject):
             email=user_email
         )
         self.user_session.save(config_dir)
-        
-        print("Session saved, showing main window")
-        # Show main window - schedule it to happen after current event processing
+    
+        print("Session saved, preparing to show main window")
+    
+        # Close the login dialog using a direct approach
+        if login_dialog_to_close:
+            try:
+                print("Closing login dialog")
+                # First hide it so it disappears from screen immediately
+                login_dialog_to_close.hide()
+                # Then close it
+                login_dialog_to_close.close()
+                # For good measure, try to delete it
+                login_dialog_to_close.deleteLater()
+                print("Login dialog scheduled for deletion")
+            except Exception as e:
+                print(f"Error closing login dialog: {str(e)}")
+    
+        # Schedule showing the main window
         QTimer.singleShot(0, self.show_main_window)
         self.session_timer.start()
     

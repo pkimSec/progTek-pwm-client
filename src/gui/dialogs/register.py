@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QMessageBox, QFormLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 import re
 import traceback
 
@@ -20,6 +20,7 @@ class RegisterDialog(BaseDialog):
     
     def __init__(self, api_client: APIClient, config: AppConfig, parent=None):
         super().__init__(parent)
+        print(f"Initializing RegisterDialog with API client: {api_client}")
         self.api_client = api_client
         self.config = config
         self.email = ""  # Store email for access after dialog closes
@@ -137,19 +138,70 @@ class RegisterDialog(BaseDialog):
         else:
             self.confirm_input.setStyleSheet("")
     
+    def handle_register(self):
+        """Entry point for registration - handles button click"""
+        print("=== Register button clicked ===")
+        # Check if the API client is available
+        if not self.api_client:
+            self.show_error(Exception("API client not available. Please try again."))
+            return
+            
+        print(f"API client available: {self.api_client}")
+        print(f"API base URL: {self.api_client.endpoints.base_url}")
+        
+        # Call the async version with proper error handling
+        try:
+            print("Starting registration process...")
+            self._handle_register_async()
+        except Exception as e:
+            print(f"Error initiating registration: {str(e)}")
+            traceback.print_exc()
+            self.show_error(e)
+    
     @async_callback
-    async def handle_register(self):
-        """Handle registration button click"""
+    async def _handle_register_async(self):
+        """Async implementation of registration handling"""
         email = self.email_input.text().strip()
         password = self.password_input.text()
         invite_code = self.invite_input.text().strip()
         
+        print(f"Registration data - Email: {email}, Invite code: {invite_code}")
+        
         try:
-            self.show_loading(True)
+            # Disable UI during registration
+            self.email_input.setEnabled(False)
+            self.password_input.setEnabled(False)
+            self.confirm_input.setEnabled(False)
+            self.invite_input.setEnabled(False)
             self.register_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(False)
+            
+            self.show_loading(True)
+            
+            print("Ensuring API session exists...")
+            await self.api_client.ensure_session()
+            
+            print("Creating registration request...")
+            # Create request object for better debugging
+            request_data = {
+                "email": email,
+                "password": password,
+                "invite_code": invite_code
+            }
+            
+            print(f"Sending registration request to: {self.api_client.endpoints.register}")
+            print(f"Request data: {request_data}")
             
             # Call API to register
-            await self.api_client.register(email, password, invite_code)
+            response = await self.api_client._request(
+                'POST', 
+                self.api_client.endpoints.register, 
+                request_data, 
+                include_auth=False,
+                retry_auth=False
+            )
+            
+            print(f"Registration response received: {response}")
             
             # Store email for use after dialog closes
             self.email = email
@@ -158,26 +210,60 @@ class RegisterDialog(BaseDialog):
             self.show_success("Registration successful! You can now log in.")
             
             # Emit signal with email
+            print(f"Emitting registration_successful signal with email: {email}")
             self.registration_successful.emit(email)
             
-            # Close dialog
-            self.accept()
+            # Close dialog with success after a short delay
+            QTimer.singleShot(500, self.accept)
             
         except APIError as e:
+            print(f"API Error during registration: {e.status_code} - {e.message}")
+            
             if e.status_code == 400:
                 if "Invalid invite code" in e.message:
                     self.show_error(Exception("Invalid invite code. Please check and try again."))
                 elif "Email already registered" in e.message:
                     self.show_error(Exception("Email already registered. Please use a different email."))
                 else:
-                    self.show_error(e)
+                    self.show_error(Exception(f"Registration error: {e.message}"))
             else:
-                self.show_error(e)
+                self.show_error(Exception(f"Server error ({e.status_code}): {e.message}"))
+                
         except Exception as e:
             print(f"Registration error: {str(e)}")
             print("Traceback:")
             traceback.print_exc()
             self.show_error(e)
         finally:
+            print("Registration process completed")
             self.show_loading(False)
+            
+            # Re-enable UI
+            self.email_input.setEnabled(True)
+            self.password_input.setEnabled(True)
+            self.confirm_input.setEnabled(True)
+            self.invite_input.setEnabled(True)
             self.register_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(True)
+
+    def accept(self):
+        """Override accept method to ensure proper closure"""
+        print("RegisterDialog: accept called")
+        # Ensure we've emitted the success signal if we have an email
+        if self.email and not self.result():
+            print(f"Emitting registration_successful signal before closing: {self.email}")
+            self.registration_successful.emit(self.email)
+    
+        # Call the parent class accept
+        super().accept()
+
+    def closeEvent(self, event):
+        """Override close event to ensure proper cleanup"""
+        print("RegisterDialog: closeEvent called")
+        # Ensure we've emitted the success signal if we have an email
+        if self.email and not self.result():
+            print(f"Emitting registration_successful signal during close: {self.email}")
+            self.registration_successful.emit(self.email)
+    
+        # Call the parent class closeEvent
+        super().closeEvent(event)

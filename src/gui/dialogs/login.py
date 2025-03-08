@@ -167,6 +167,16 @@ class LoginDialog(BaseDialog):
     def handle_register(self):
         """Handle register button click"""
         self.register_clicked.emit()
+
+    def handle_login_success(self, response, master_password):
+        """
+        Override this to ensure dialog closes on successful login
+        """
+        print("LoginDialog: Login successful, closing dialog")
+        # First emit the signal
+        self.login_successful.emit(response, master_password)
+        # Then immediately close the dialog
+        self.done(QDialog.DialogCode.Accepted)
     
     @async_callback
     async def test_connection(self):
@@ -240,39 +250,37 @@ class LoginDialog(BaseDialog):
         print("Login attempt started")
         email = self.email.text().strip()
         password = self.password.text()
-        
+
         if not email or not password:
             print("Missing credentials")
             self.show_error(ValueError("Please enter email and password"))
             return
-            
+
         try:
             self.show_loading(True)
             print(f"Attempting login for email: {email}")
-            
+
             # Disable inputs during login
             self.email.setEnabled(False)
             self.password.setEnabled(False)
             self.login_btn.setEnabled(False)
-            
+
             response = await self.api_client.login(email, password)
             print("Login successful")
-            
+
             # Save email if remember checkbox is checked
             self.config.remember_email = self.remember_email.isChecked()
             if self.config.remember_email:
                 self.config.last_email = email
             else:
                 self.config.last_email = ""
-    
+
             # Save successful login in config
             self.config.save()
 
-            # Emit success signal with login response and master password
-            self.login_successful.emit(response, password)
-            
-            # Close dialog
-            self.accept()
+            # Use the new method to handle login success
+            self.handle_login_success(response, password)
+
             
         except APIError as e:
             print(f"Login failed with API error: {e.status_code} - {e.message}")
