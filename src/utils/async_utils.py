@@ -32,18 +32,40 @@ class AsyncRunner(QObject):
             self.error.emit(e)
 
 def async_callback(func: Callable) -> Callable:
-    """Decorator to handle async callbacks in Qt slots"""
+    """
+    Decorator to handle async callbacks in Qt slots.
+    This ensures proper integration between asyncio and Qt.
+    """
     @wraps(func)
     def wrapper(self, *args, **kwargs) -> None:
+        print(f"async_callback: wrapping {func.__name__}")
+        
         async def async_func():
             try:
+                print(f"Starting async function: {func.__name__}")
                 result = await func(self, *args, **kwargs)
+                print(f"Completed async function: {func.__name__}")
                 return result
             except Exception as e:
+                print(f"Error in async function {func.__name__}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                
+                # Try to handle the error in the UI if possible
                 if hasattr(self, 'handle_error'):
                     self.handle_error(e)
+                elif hasattr(self, 'show_error'):
+                    self.show_error(e)
                 else:
-                    raise e
+                    # If no error handler, re-raise in main thread via QTimer
+                    def show_error_dialog():
+                        from PyQt6.QtWidgets import QMessageBox
+                        QMessageBox.critical(
+                            None, 
+                            "Error", 
+                            f"An error occurred: {str(e)}"
+                        )
+                    QTimer.singleShot(0, show_error_dialog)
         
         # Check if self is a QObject before using as parent
         if isinstance(self, QObject):
@@ -52,7 +74,24 @@ def async_callback(func: Callable) -> Callable:
             # Use no parent if self is not a QObject
             runner = AsyncRunner()
             
-        QTimer.singleShot(0, lambda: runner.run(async_func()))
+        # Connect signals for tracking
+        if hasattr(runner, 'finished'):
+            runner.finished.connect(
+                lambda result: print(f"Async function {func.__name__} finished with result: {result}")
+            )
+        if hasattr(runner, 'error'):
+            runner.error.connect(
+                lambda e: print(f"Async function {func.__name__} failed with error: {str(e)}")
+            )
+        
+        # Start the async function
+        try:
+            QTimer.singleShot(0, lambda: runner.run(async_func()))
+            print(f"Scheduled async function: {func.__name__}")
+        except Exception as e:
+            print(f"Error scheduling async function {func.__name__}: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
     return wrapper
 

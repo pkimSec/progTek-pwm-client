@@ -12,9 +12,33 @@ class LoginResponse(BaseModel):
     user_id: int
 
 class RegisterRequest(BaseModel):
+    """Request model for user registration"""
     email: str
     password: str
     invite_code: str
+    
+    class Config:
+        # Allow extra fields in case server API changes
+        extra = "ignore"
+        
+    def model_dump(self) -> dict:
+        """
+        Convert model to dictionary compatible with API request.
+        This is helpful for backward compatibility with older Pydantic versions.
+        """
+        if hasattr(super(), "model_dump"):
+            # For Pydantic v2+
+            return super().model_dump()
+        elif hasattr(super(), "dict"):
+            # For Pydantic v1
+            return super().dict()
+        else:
+            # Manual fallback
+            return {
+                "email": self.email,
+                "password": self.password,
+                "invite_code": self.invite_code
+            }
 
 class VaultSetupRequest(BaseModel):
     master_password: str
