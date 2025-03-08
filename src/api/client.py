@@ -86,12 +86,12 @@ class APIClient:
         """
         Set master password for vault operations.
         Also initializes vault if salt is available.
-
+        
         Args:
             password: User's master password
         """
         self._master_password = password
-    
+        
         # If we already have a salt, try to unlock the vault
         if hasattr(self, 'user_session') and self.user_session and self.user_session.vault_salt:
             from crypto.vault import get_vault
@@ -326,6 +326,63 @@ class APIClient:
         
         return LoginResponse(**response)
 
+    async def list_categories(self) -> List[Dict[str, Any]]:
+        """Get all categories for the current user"""
+        try:
+            print(f"Fetching categories from: {self.endpoints.categories}")
+            response = await self._request('GET', self.endpoints.categories)
+            print(f"Category response: {response}")
+            if isinstance(response, dict) and 'categories' in response:
+                return response['categories']
+            else:
+                print(f"Unexpected response format: {response}")
+                return []
+        except Exception as e:
+            print(f"Error listing categories: {str(e)}")
+            # Return empty list on error to avoid UI breaking
+            return []
+
+
+    async def create_category(self, name: str, parent_id: Optional[int] = None) -> Dict[str, Any]:
+        """Create a new category"""
+        data = {
+            'name': name
+        }
+        if parent_id is not None:
+            data['parent_id'] = parent_id
+        
+        try:
+            print(f"Creating category: {name}")
+            response = await self._request('POST', self.endpoints.categories, data)
+            print(f"Create category response: {response}")
+            if isinstance(response, dict) and 'category' in response:
+                return response['category']
+            else:
+                print(f"Unexpected response format: {response}")
+                return {'id': None, 'name': name}
+        except Exception as e:
+            print(f"Error creating category: {str(e)}")
+            raise
+
+    async def get_category(self, category_id: int) -> Dict[str, Any]:
+        """Get a specific category"""
+        return await self._request('GET', self.endpoints.category(category_id))
+
+    async def update_category(self, category_id: int, name: Optional[str] = None, parent_id: Optional[int] = None) -> Dict[str, Any]:
+        """Update a category"""
+        data = {}
+        if name is not None:
+            data['name'] = name
+        if parent_id is not None:
+            data['parent_id'] = parent_id
+        
+        response = await self._request('PUT', self.endpoints.category(category_id), data)
+        return response['category']
+
+    async def delete_category(self, category_id: int) -> Dict[str, str]:
+        """Delete a category"""
+        return await self._request('DELETE', self.endpoints.category(category_id))
+
     async def logout(self):
         """
         Log out user and clear session.
@@ -343,14 +400,14 @@ class APIClient:
                 from crypto.vault import get_vault
                 vault = get_vault()
                 vault.lock()
-
+                
                 # Clear session data
                 self._access_token = None
                 self._session_token = None
                 self._token_expires_at = None
                 self._master_password = None
                 self._user_email = None
-
+                
                 await self.close()
                 print("Logout cleanup complete")
         else:
@@ -436,25 +493,25 @@ class APIClient:
     async def setup_vault(self, master_password: str):
         """
         Initialize user's vault with master password.
-
+        
         Args:
             master_password: User's master password for vault encryption
         """
         data = {'master_password': master_password}
         response = await self._request('POST', self.endpoints.vault_setup, data)
-
+        
         # Initialize vault with master password and salt
         from crypto.vault import get_vault
         salt = response.get('salt') or await self.get_vault_salt()
-
+        
         # Unlock vault with master password and salt
         vault = get_vault()
         vault.unlock(master_password, salt)
-
+        
         # Store master password for future vault unlocking
         if hasattr(self, '_master_password'):
             self._master_password = master_password
-
+        
         return response
 
     async def get_vault_salt(self) -> str:
@@ -464,20 +521,20 @@ class APIClient:
         """
         response = await self._request('GET', self.endpoints.vault_salt)
         salt = response['salt']
-    
+        
         # Store salt for later use
         if hasattr(self.user_session, 'set_vault_salt'):
             self.user_session.set_vault_salt(salt)
-    
+        
         return salt
 
     async def create_entry(self, entry_data: Dict[str, Any]) -> PasswordEntry:
         """
         Create new password entry.
-
+        
         Args:
             entry_data: Dictionary with entry fields (will be encrypted)
-
+        
         Returns:
             PasswordEntry object
         """
@@ -495,10 +552,10 @@ class APIClient:
                     vault.unlock(self._master_password, self.user_session.vault_salt)
                 else:
                     raise ValueError("Vault is locked and cannot encrypt data")
-
+            
             # Encrypt the entry data
             encrypted_data = vault.encrypt_entry(entry_data)
-    
+        
         # Send to server
         data = {'encrypted_data': encrypted_data}
         response = await self._request('POST', self.endpoints.vault_entries, data)
@@ -517,11 +574,11 @@ class APIClient:
     async def update_entry(self, entry_id: int, entry_data: Union[str, Dict[str, Any]]) -> Dict[str, Union[str, int]]:
         """
         Update password entry.
-
+        
         Args:
             entry_id: ID of the entry to update
             entry_data: Dictionary with entry fields or encrypted JSON string
-
+        
         Returns:
             Response from server
         """
@@ -539,13 +596,9 @@ class APIClient:
                     vault.unlock(self._master_password, self.user_session.vault_salt)
                 else:
                     raise ValueError("Vault is locked and cannot encrypt data")
-
+            
             # Encrypt the entry data
             encrypted_data = vault.encrypt_entry(entry_data)
-
-        # Send to server
-        data = {'encrypted_data': encrypted_data}
-        return await self._request('PUT', self.endpoints.vault_entry(entry_id), data)
 
     async def delete_entry(self, entry_id: int):
         """Delete password entry"""
