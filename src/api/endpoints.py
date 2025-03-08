@@ -45,6 +45,13 @@ class APIEndpoints:
         return self._url('/api/vault/salt')
 
     @property
+    def invites(self) -> str:
+        return self._url('/api/invites')
+
+    def invite_code(self, code: str) -> str:
+        return self._url(f'/api/invites/{code}')
+
+    @property
     def vault_entries(self) -> str:
         return self._url('/api/vault/entries')
 

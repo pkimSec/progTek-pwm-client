@@ -75,6 +75,27 @@ class APIClient:
         """Set master password for vault operations"""
         self._master_password = password
 
+    async def list_invite_codes(self) -> List[Dict[str, Any]]:
+        """List all invite codes (admin only)"""
+        try:
+            response = await self._request('GET', self.endpoints.invites)
+            return response['invite_codes']
+        except Exception as e:
+            print(f"Error listing invite codes: {str(e)}")
+            # Return empty list if endpoint not yet implemented
+            return []
+
+    async def deactivate_invite_code(self, invite_code: str) -> Dict[str, str]:
+        """Deactivate an invite code (admin only)"""
+        try:
+            return await self._request(
+                'DELETE', 
+                self.endpoints.invite_code(invite_code)
+            )
+        except Exception as e:
+            print(f"Error deactivating invite code: {str(e)}")
+            raise e
+
     async def __aenter__(self):
         """Context manager entry - create session"""
         await self.create_session()

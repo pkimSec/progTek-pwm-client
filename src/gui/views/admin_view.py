@@ -3,14 +3,15 @@ from PyQt6.QtWidgets import (
     QPushButton, QLineEdit, QGroupBox, QFormLayout,
     QTextEdit, QDialog, QDialogButtonBox, QMessageBox, 
     QTableWidget, QTableWidgetItem, QHeaderView, 
-    QComboBox, QCheckBox, QTabWidget, QSplitter
+    QComboBox, QCheckBox, QTabWidget, QSplitter, QListWidget, QListWidgetItem, QMenu
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QClipboard, QGuiApplication
+from PyQt6.QtGui import QClipboard, QGuiApplication, QAction, QColor
 
 from api.client import APIClient
 from api.models import APIError
 from utils.async_utils import async_callback
+
 
 class InviteDialog(QDialog):
     """Dialog to display generated invite code"""
@@ -73,7 +74,162 @@ class InviteDialog(QDialog):
             QMessageBox.StandardButton.Ok
         )
 
-class UserTableWidget(QTableWidget):
+
+class InviteListWidget(QWidget):
+    """Widget for displaying and managing invite codes"""
+    
+    refresh_requested = pyqtSignal()  # Signal to request a refresh of the list
+    deactivate_requested = pyqtSignal(str)  # Signal to request deactivation of an invite code
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.invite_codes = []  # List of invite codes
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Set up the user interface"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Header
+        header_layout = QHBoxLayout()
+        
+        title_label = QLabel("Generated Invite Codes")
+        title_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(title_label)
+        
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.on_refresh_clicked)
+        header_layout.addWidget(self.refresh_btn)
+        
+        layout.addLayout(header_layout)
+        
+        # List widget
+        self.list_widget = QListWidget()
+        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self.show_context_menu)
+        layout.addWidget(self.list_widget)
+        
+        # Empty state message
+        self.empty_label = QLabel("No invite codes have been generated yet.")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet("color: gray; font-style: italic;")
+        layout.addWidget(self.empty_label)
+        
+        # Initially show empty state
+        self.list_widget.hide()
+        self.empty_label.show()
+    
+    def set_invite_codes(self, invite_codes):
+        """Set the list of invite codes"""
+        self.invite_codes = invite_codes
+        self.update_list()
+    
+    def update_list(self):
+        """Update the list widget with invite codes"""
+        self.list_widget.clear()
+        
+        if not self.invite_codes:
+            self.list_widget.hide()
+            self.empty_label.show()
+            return
+        
+        self.empty_label.hide()
+        self.list_widget.show()
+        
+        for invite in self.invite_codes:
+            item = QListWidgetItem()
+            
+            # Create display text
+            display_text = invite['code']
+            if 'email' in invite and invite['email']:
+                display_text = f"{display_text} - Used by: {invite['email']}"
+            
+            item.setText(display_text)
+            
+            # Set data for context menu
+            item.setData(Qt.ItemDataRole.UserRole, invite)
+            
+            # Set color based on status
+            if invite.get('is_used', False):
+                item.setForeground(QColor('gray'))
+                item.setToolTip(f"Used by {invite.get('email', 'unknown')}")
+            else:
+                item.setForeground(QColor('green'))
+                item.setToolTip("Available for use")
+            
+            self.list_widget.addItem(item)
+    
+    def add_invite_code(self, invite_code):
+        """Add a newly generated invite code to the list"""
+        # Create a new invite code entry
+        new_invite = {
+            'code': invite_code,
+            'is_used': False
+        }
+        
+        # Add to list and update
+        self.invite_codes.insert(0, new_invite)  # Add at the beginning
+        self.update_list()
+    
+    def on_refresh_clicked(self):
+        """Handle refresh button click"""
+        self.refresh_requested.emit()
+    
+    def show_context_menu(self, position):
+        """Show context menu for invite code actions"""
+        item = self.list_widget.itemAt(position)
+        if not item:
+            return
+            
+        # Get invite data
+        invite = item.data(Qt.ItemDataRole.UserRole)
+        if not invite:
+            return
+            
+        # Create menu
+        menu = QMenu(self)
+        
+        # Copy action
+        copy_action = QAction("Copy Code", self)
+        copy_action.triggered.connect(lambda: self.copy_to_clipboard(invite['code']))
+        menu.addAction(copy_action)
+        
+        # Deactivate action (only if not used)
+        if not invite.get('is_used', False):
+            deactivate_action = QAction("Deactivate", self)
+            deactivate_action.triggered.connect(lambda: self.deactivate_invite(invite['code']))
+            menu.addAction(deactivate_action)
+        
+        menu.exec(self.list_widget.viewport().mapToGlobal(position))
+    
+    def copy_to_clipboard(self, invite_code):
+        """Copy invite code to clipboard"""
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(invite_code)
+        
+        # Show confirmation
+        QMessageBox.information(
+            self, "Copied", 
+            "Invite code copied to clipboard!",
+            QMessageBox.StandardButton.Ok
+        )
+    
+    def deactivate_invite(self, invite_code):
+        """Request to deactivate an invite code"""
+        # Confirm deactivation
+        reply = QMessageBox.question(
+            self, "Confirm Deactivation",
+            f"Are you sure you want to deactivate this invite code?\n\n{invite_code}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.deactivate_requested.emit(invite_code)
+
+
+class UserTableWidget(QWidget):
     """Widget for displaying and managing users"""
     
     user_selected = pyqtSignal(int)  # Signal emitted with user ID when selected
@@ -85,29 +241,37 @@ class UserTableWidget(QTableWidget):
         
     def setup_ui(self):
         """Set up the table UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Create the table
+        self.table = QTableWidget()
+        
         # Set column headers
-        self.setColumnCount(5)
-        self.setHorizontalHeaderLabels(["ID", "Email", "Role", "Status", "Actions"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["ID", "Email", "Role", "Status", "Actions"])
         
         # Set table properties
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
         
         # Set column widths
-        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # ID
-        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Email
-        self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Role
-        self.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Status
-        self.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Actions
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # ID
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Email
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Role
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Status
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Actions
         
         # Connect signals
-        self.cellClicked.connect(self.on_cell_clicked)
+        self.table.cellClicked.connect(self.on_cell_clicked)
+        
+        layout.addWidget(self.table)
     
     def set_users(self, users):
         """Set the list of users to display"""
-        self.clearContents()
-        self.setRowCount(len(users))
+        self.table.clearContents()
+        self.table.setRowCount(len(users))
         self.users = {}
         
         for i, user in enumerate(users):
@@ -115,15 +279,15 @@ class UserTableWidget(QTableWidget):
             self.users[user['id']] = user
             
             # Set table cells
-            self.setItem(i, 0, QTableWidgetItem(str(user['id'])))
-            self.setItem(i, 1, QTableWidgetItem(user['email']))
-            self.setItem(i, 2, QTableWidgetItem(user['role']))
+            self.table.setItem(i, 0, QTableWidgetItem(str(user['id'])))
+            self.table.setItem(i, 1, QTableWidgetItem(user['email']))
+            self.table.setItem(i, 2, QTableWidgetItem(user['role']))
             
             # Status indicator
             status_text = "Active" if user['is_active'] else "Inactive"
             status_item = QTableWidgetItem(status_text)
-            status_item.setForeground(Qt.GlobalColor.darkGreen if user['is_active'] else Qt.GlobalColor.darkRed)
-            self.setItem(i, 3, status_item)
+            status_item.setForeground(QColor('darkGreen') if user['is_active'] else QColor('darkRed'))
+            self.table.setItem(i, 3, status_item)
             
             # Add action buttons
             actions_widget = QWidget()
@@ -145,13 +309,13 @@ class UserTableWidget(QTableWidget):
                 edit_role_btn.clicked.connect(self.on_action_button_clicked)
                 actions_layout.addWidget(edit_role_btn)
             
-            self.setCellWidget(i, 4, actions_widget)
+            self.table.setCellWidget(i, 4, actions_widget)
     
     def on_cell_clicked(self, row, column):
         """Handle cell clicks to emit the user_selected signal"""
         # Only emit signal when clicking on non-action cells
         if column != 4:
-            user_id = int(self.item(row, 0).text())
+            user_id = int(self.table.item(row, 0).text())
             self.user_selected.emit(user_id)
     
     def on_action_button_clicked(self):
@@ -175,6 +339,7 @@ class UserTableWidget(QTableWidget):
                 
             if parent and hasattr(parent, 'edit_user_role'):
                 parent.edit_user_role(user_id)
+
 
 class RoleDialog(QDialog):
     """Dialog for editing user roles"""
@@ -233,6 +398,7 @@ class RoleDialog(QDialog):
     def get_selected_role(self):
         """Get the selected role"""
         return self.role_combo.currentText()
+
 
 class UserDetailWidget(QWidget):
     """Widget for displaying user details"""
@@ -353,6 +519,7 @@ class UserDetailWidget(QWidget):
             if parent and hasattr(parent, 'edit_user_role'):
                 parent.edit_user_role(self.current_user_id)
 
+
 class AdminView(QWidget):
     """View for administrative functions"""
     
@@ -392,68 +559,6 @@ class AdminView(QWidget):
         self.tab_widget.addTab(system_tab, "System Information")
         
         main_layout.addWidget(self.tab_widget)
-        
-    def generate_invite_code_direct(self):
-        """Non-async version of invite code generation for debugging"""
-        print("Direct invite generation method called")
-        try:
-            # Import the needed tools for a manual async call
-            import asyncio
-            from PyQt6.QtCore import QTimer
-            
-            # Create a function to run the async code
-            async def run_async():
-                try:
-                    print("Beginning invite code generation...")
-                    
-                    # Call API to create invite
-                    invite_code = await self.api_client.create_invite()
-                    
-                    print(f"Received invite code: {invite_code}")
-                    
-                    # Show invite code dialog in the main thread
-                    QTimer.singleShot(0, lambda: self.show_invite_dialog(invite_code))
-                    
-                except Exception as e:
-                    import traceback
-                    print(f"Exception during invite generation: {str(e)}")
-                    traceback.print_exc()
-                    # Show error on main thread
-                    QTimer.singleShot(0, lambda: self.show_error_dialog(str(e)))
-            
-            # Create and run the event loop
-            async def start():
-                task = asyncio.create_task(run_async())
-                await task
-            
-            # Run the async code in a way that works with Qt
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(start())
-            loop.close()
-            
-        except Exception as e:
-            import traceback
-            print(f"Exception setting up async loop: {str(e)}")
-            traceback.print_exc()
-            QMessageBox.critical(
-                self, "Error", 
-                f"Failed to generate invite code: {str(e)}",
-                QMessageBox.StandardButton.Ok
-            )
-
-    def show_invite_dialog(self, invite_code):
-        """Show the invite dialog with the generated code"""
-        dialog = InviteDialog(invite_code, self)
-        dialog.exec()
-        
-    def show_error_dialog(self, error_message):
-        """Show error dialog with the given message"""
-        QMessageBox.critical(
-            self, "Error", 
-            f"Failed to generate invite code: {error_message}",
-            QMessageBox.StandardButton.Ok
-        )
     
     def setup_user_management_tab(self, tab):
         """Set up the user management tab"""
@@ -501,25 +606,24 @@ class AdminView(QWidget):
         invite_info.setWordWrap(True)
         invite_layout.addWidget(invite_info)
         
-        # Generate invite button - using a direct approach to bypass potential async issues
+        # Generate invite button
         generate_btn = QPushButton("Generate New Invite Code")
-        
-        # Use a direct method (not async) to test button connection
-        def on_generate_button_clicked():
-            self.generate_invite_code_direct()
-            
-        generate_btn.clicked.connect(on_generate_button_clicked)
+        generate_btn.clicked.connect(self.generate_invite_code_direct)
         invite_layout.addWidget(generate_btn)
         
-        # Recent invites (placeholder for now)
-        invites_label = QLabel("Recent Invites (Coming Soon)")
-        invites_label.setStyleSheet("color: gray; font-style: italic;")
-        invite_layout.addWidget(invites_label)
+        # Invite list
+        self.invite_list = InviteListWidget()
+        self.invite_list.refresh_requested.connect(self.refresh_invite_codes)
+        self.invite_list.deactivate_requested.connect(self.deactivate_invite_code)
+        invite_layout.addWidget(self.invite_list)
         
         layout.addWidget(invite_group)
         
         # Add stretch to push everything to the top
         layout.addStretch()
+        
+        # Initial refresh of invite codes
+        self.refresh_invite_codes()
     
     def setup_system_tab(self, tab):
         """Set up the system information tab"""
@@ -545,55 +649,179 @@ class AdminView(QWidget):
         # Add stretch to push everything to the top
         layout.addStretch()
     
-    @async_callback
-    async def generate_invite_code(self):
-        """Generate a new invite code"""
+    def generate_invite_code_direct(self):
+        """Non-async version of invite code generation for debugging"""
+        print("Direct invite generation method called")
         try:
-            # Show loading indicator if available
-            if hasattr(self, 'show_loading'):
-                self.show_loading(True)
-            
-            print("AdminView: Generating invite code - calling API")
-            
-            # Call API to create invite
-            invite_code = await self.api_client.create_invite()
-            
-            print(f"AdminView: Received invite code: {invite_code}")
-            
-            # Show invite code dialog
-            dialog = InviteDialog(invite_code, self)
-            dialog.exec()
-            
-        except APIError as e:
-            print(f"AdminView: API Error generating invite code: {e.status_code} - {e.message}")
-            # Show error with specific message
-            if e.status_code == 403:
-                QMessageBox.critical(
-                    self, "Permission Denied", 
-                    "You don't have permission to generate invite codes. Admin role is required.",
-                    QMessageBox.StandardButton.Ok
-                )
-            else:
-                QMessageBox.critical(
-                    self, "Error", 
-                    f"Failed to generate invite code: {e.message}",
-                    QMessageBox.StandardButton.Ok
-                )
+            # Import the needed tools for a manual async call
+            import asyncio
+            from PyQt6.QtCore import QTimer
+        
+            # Create a function to run the async code
+            async def run_async():
+                try:
+                    print("Beginning invite code generation...")
+                
+                    # Call API to create invite
+                    invite_code = await self.api_client.create_invite()
+                
+                    print(f"Received invite code: {invite_code}")
+                
+                    # Use closure to capture invite_code
+                    def show_and_add():
+                        self.show_invite_dialog(invite_code)
+                        self.add_invite_to_list(invite_code)
+                
+                    # Show invite code dialog in the main thread
+                    QTimer.singleShot(0, show_and_add)
+                
+                except Exception as e:
+                    import traceback
+                    print(f"Exception during invite generation: {str(e)}")
+                    traceback.print_exc()
+                
+                    # Capture exception in closure for the timer callback
+                    error_msg = str(e)
+                    QTimer.singleShot(0, lambda: self.show_error_dialog(error_msg))
+        
+            # Use a global event loop from asyncio directly
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        
+            # Run coroutine without closing the loop
+            future = asyncio.ensure_future(run_async(), loop=loop)
+            loop.run_until_complete(future)
+        
         except Exception as e:
             import traceback
-            print(f"AdminView: Exception generating invite code: {str(e)}")
+            print(f"Exception setting up async loop: {str(e)}")
             traceback.print_exc()
-            # Show general error
-            QMessageBox.critical(
-                self, "Error", 
-                f"Failed to generate invite code: {str(e)}",
-                QMessageBox.StandardButton.Ok
-            )
-        finally:
-            print("AdminView: Invite code generation complete")
-            # Hide loading indicator if available
-            if hasattr(self, 'show_loading'):
-                self.show_loading(False)
+            self.show_error_dialog(f"Failed to generate invite code: {str(e)}")
+    
+    def show_invite_dialog(self, invite_code):
+        """Show the invite dialog with the generated code"""
+        dialog = InviteDialog(invite_code, self)
+        dialog.exec()
+        
+    def show_error_dialog(self, error_message):
+        """Show error dialog with the given message"""
+        QMessageBox.critical(
+            self, "Error", 
+            f"Failed to generate invite code: {error_message}",
+            QMessageBox.StandardButton.Ok
+        )
+    
+    def add_invite_to_list(self, invite_code):
+        """Add a newly generated invite code to the list"""
+        if hasattr(self, 'invite_list'):
+            self.invite_list.add_invite_code(invite_code)
+    
+    def refresh_invite_codes(self):
+        """Refresh the list of invite codes"""
+        try:
+            # Import the needed tools for a manual async call
+            import asyncio
+            from PyQt6.QtCore import QTimer
+        
+            # Create a function to run the async code
+            async def run_async():
+                try:
+                    print("Refreshing invite codes...")
+                
+                    # Call API to get invite codes
+                    invite_codes = await self.api_client.list_invite_codes()
+                
+                    print(f"Received {len(invite_codes)} invite codes")
+                
+                    # Capture invite_codes in closure
+                    def update_list():
+                        self.update_invite_list(invite_codes)
+                
+                    # Update UI in the main thread
+                    QTimer.singleShot(0, update_list)
+                
+                except Exception as e:
+                    import traceback
+                    print(f"Exception during invite refresh: {str(e)}")
+                    traceback.print_exc()
+                    # Empty list if error
+                    QTimer.singleShot(0, lambda: self.update_invite_list([]))
+        
+            # Use a global event loop from asyncio directly
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        
+            # Run coroutine without closing the loop
+            future = asyncio.ensure_future(run_async(), loop=loop)
+            loop.run_until_complete(future)
+        
+        except Exception as e:
+            import traceback
+            print(f"Exception setting up async loop: {str(e)}")
+            traceback.print_exc()
+    
+    def update_invite_list(self, invite_codes):
+        """Update the invite list widget with the given invite codes"""
+        if hasattr(self, 'invite_list'):
+            self.invite_list.set_invite_codes(invite_codes)
+    
+    def deactivate_invite_code(self, invite_code):
+        """Deactivate the given invite code"""
+        try:
+            # Import the needed tools for a manual async call
+            import asyncio
+            from PyQt6.QtCore import QTimer
+        
+            # Create a function to run the async code
+            async def run_async():
+                try:
+                    print(f"Deactivating invite code: {invite_code}")
+                
+                    # Call API to deactivate invite code
+                    result = await self.api_client.deactivate_invite_code(invite_code)
+                
+                    print(f"Deactivation result: {result}")
+                
+                    # Show success message and refresh the list
+                    QTimer.singleShot(0, self.show_deactivation_success)
+                    QTimer.singleShot(100, self.refresh_invite_codes)
+                
+                except Exception as e:
+                    import traceback
+                    print(f"Exception during invite deactivation: {str(e)}")
+                    traceback.print_exc()
+                
+                    # Capture exception message
+                    error_msg = str(e)
+                    QTimer.singleShot(0, lambda: self.show_error_dialog(f"Failed to deactivate invite code: {error_msg}"))
+        
+            # Use a global event loop from asyncio directly
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        
+            # Run coroutine without closing the loop
+            future = asyncio.ensure_future(run_async(), loop=loop)
+            loop.run_until_complete(future)
+        
+        except Exception as e:
+            import traceback
+            print(f"Exception setting up async loop: {str(e)}")
+            traceback.print_exc()
+            self.show_error_dialog(f"Failed to deactivate invite code: {str(e)}")
+    
+    def show_deactivation_success(self):
+        """Show success message for invite code deactivation"""
+        QMessageBox.information(
+            self, "Success", 
+            "Invite code deactivated successfully.",
+            QMessageBox.StandardButton.Ok
+        )
     
     @async_callback
     async def refresh_users(self):
@@ -606,8 +834,8 @@ class AdminView(QWidget):
             print("AdminView: Refreshing users list")
             
             # This message will be displayed in the UI for now
-            self.user_table.clearContents()
-            self.user_table.setRowCount(0)
+            self.user_table.table.clearContents()
+            self.user_table.table.setRowCount(0)
             
             # Display a message that this feature is waiting for API implementation
             QMessageBox.information(
@@ -619,11 +847,12 @@ class AdminView(QWidget):
             )
             
         except APIError as e:
+            print(f"AdminView: API Error refreshing users: {e.status_code} - {e.message}")
             # Show error with specific message
             if e.status_code == 403:
                 QMessageBox.critical(
                     self, "Permission Denied", 
-                    "You don't have permission to view users. Admin role is required.",
+                    "You don't have permission to view users.",
                     QMessageBox.StandardButton.Ok
                 )
             else:
@@ -633,6 +862,9 @@ class AdminView(QWidget):
                     QMessageBox.StandardButton.Ok
                 )
         except Exception as e:
+            import traceback
+            print(f"AdminView: Exception refreshing users: {str(e)}")
+            traceback.print_exc()
             # Show general error
             QMessageBox.critical(
                 self, "Error", 
@@ -706,6 +938,7 @@ class AdminView(QWidget):
                 )
                 
             except APIError as e:
+                print(f"AdminView: API Error updating user status: {e.status_code} - {e.message}")
                 # Show error with specific message
                 if e.status_code == 403:
                     QMessageBox.critical(
@@ -720,6 +953,9 @@ class AdminView(QWidget):
                         QMessageBox.StandardButton.Ok
                     )
             except Exception as e:
+                import traceback
+                print(f"AdminView: Exception updating user status: {str(e)}")
+                traceback.print_exc()
                 # Show general error
                 QMessageBox.critical(
                     self, "Error", 
@@ -777,6 +1013,7 @@ class AdminView(QWidget):
                 )
                 
             except APIError as e:
+                print(f"AdminView: API Error updating user role: {e.status_code} - {e.message}")
                 # Show error with specific message
                 if e.status_code == 403:
                     QMessageBox.critical(
@@ -791,6 +1028,9 @@ class AdminView(QWidget):
                         QMessageBox.StandardButton.Ok
                     )
             except Exception as e:
+                import traceback
+                print(f"AdminView: Exception updating user role: {str(e)}")
+                traceback.print_exc()
                 # Show general error
                 QMessageBox.critical(
                     self, "Error", 
