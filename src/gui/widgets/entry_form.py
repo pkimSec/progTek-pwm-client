@@ -1,9 +1,10 @@
 from PyQt6.QtWidgets import (
     QWidget, QFormLayout, QLineEdit, QTextEdit, QComboBox, QPushButton,
-    QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QToolButton, QGroupBox
+    QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QToolButton, QGroupBox,
+    QProgressBar
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QIcon, QClipboard, QGuiApplication
 
 from gui.widgets.password_generator import PasswordGenerator
 from gui.widgets.strength_meter import PasswordStrengthMeter
@@ -78,10 +79,19 @@ class EntryForm(QWidget):
         form_layout.addRow("URL:", self.url)
         
         # Category field
+        category_layout = QHBoxLayout()
         self.category = QComboBox()
-        self.category.setEditable(True)
-        self.category.addItems(["Business", "Finance", "Personal", "Social", "Email", "Shopping"])
-        form_layout.addRow("Category:", self.category)
+        self.category.setEditable(False)
+        category_layout.addWidget(self.category)
+        
+        # Refresh categories button
+        self.refresh_categories_btn = QToolButton()
+        self.refresh_categories_btn.setText("⟳")
+        self.refresh_categories_btn.setToolTip("Refresh Categories")
+        self.refresh_categories_btn.clicked.connect(self.load_categories)
+        category_layout.addWidget(self.refresh_categories_btn)
+        
+        form_layout.addRow("Category:", category_layout)
         
         # Notes field
         self.notes = QTextEdit()
@@ -136,8 +146,53 @@ class EntryForm(QWidget):
         
         main_layout.addLayout(button_layout)
         
+        # Add a progress bar for loading operations
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.hide()
+        main_layout.addWidget(self.progress_bar)
+        
         # Set initial state
         self.set_mode("view")
+        
+        # Load categories
+        self.load_categories()
+        
+        # Initialize current_category
+        self.current_category_id = None
+
+    @async_callback
+    async def load_categories(self):
+        """Load categories from server"""
+        if not self.api_client:
+            # Get API client from parent if not provided
+            self.api_client = self.parent().api_client if self.parent() and hasattr(self.parent(), 'api_client') else None
+        
+        if not self.api_client:
+            print("API client not available")
+            return
+        
+        try:
+            # Show loading
+            self.show_loading(True)
+            
+            # Clear existing categories
+            self.category.clear()
+            
+            # Add "None" option
+            self.category.addItem("None", None)
+            
+            # Get categories from server
+            categories = await self.api_client.list_categories()
+            
+            # Add categories to combo box
+            for category in categories:
+                self.category.addItem(category['name'], category['id'])
+            
+        except Exception as e:
+            print(f"Error loading categories: {str(e)}")
+        finally:
+            self.show_loading(False)
     
     def set_mode(self, mode: str):
         """Set the form mode (view, add, edit)"""
@@ -240,37 +295,64 @@ class EntryForm(QWidget):
         
         if reply == QMessageBox.StandardButton.Yes:
             self.delete_entry()
+
+    def get_entry_data(self) -> dict:
+        """Get form data as dictionary"""
+        return {
+            "title": self.title.text().strip(),
+            "username": self.username.text().strip(),
+            "password": self.password.text(),
+            "url": self.url.text().strip(),
+            "category_id": self.category.currentData(),
+            "category": self.category.currentText(),
+            "notes": self.notes.toPlainText().strip()
+        }
     
     @async_callback
-    async def load_entry(self, entry_id: int, master_password: str = None):
+    async def load_entry(self, entry_id: int, vault_locked: bool = False):
         """Load an entry by ID"""
         if not self.api_client:
             # Get API client from parent if not provided
             self.api_client = self.parent().api_client if self.parent() and hasattr(self.parent(), 'api_client') else None
         
         if not self.api_client:
-            QMessageBox.critical(self, "Error", "API client not available")
+            self.show_error(Exception("API client not available"))
             return
         
         try:
+            # Show loading
+            self.show_loading(True)
+            
             # Get entry from API
             entry = await self.api_client.get_entry(entry_id)
             
             # Store entry ID
             self.current_entry_id = entry_id
             
-            # Parse encrypted data (this would normally be decrypted)
-            # For prototype purposes, we use dummy data
-            entry_data = {
-                "title": f"Entry {entry_id}",
-                "username": "user@example.com",
-                "password": "password123",
-                "url": "https://example.com",
-                "category": "Personal",
-                "notes": "This is a sample entry",
-                "created_at": entry.created_at.isoformat(),
-                "updated_at": entry.updated_at.isoformat()
-            }
+            # If vault is locked, show placeholder data
+            if vault_locked:
+                entry_data = {
+                    "title": f"Entry {entry_id} (Locked)",
+                    "username": "[Encrypted]",
+                    "password": "[Encrypted]",
+                    "url": "[Encrypted]",
+                    "category": "Unknown",
+                    "category_id": None,
+                    "notes": "The vault is locked. Unlock it to view entry details.",
+                    "created_at": entry.created_at.isoformat(),
+                    "updated_at": entry.updated_at.isoformat()
+                }
+            else:
+                # Decrypt entry data
+                from crypto.vault import get_vault
+                vault = get_vault()
+                try:
+                    entry_data = vault.decrypt_entry(entry.encrypted_data)
+                    entry_data['created_at'] = entry.created_at.isoformat()
+                    entry_data['updated_at'] = entry.updated_at.isoformat()
+                except Exception as e:
+                    self.show_error(Exception(f"Failed to decrypt entry: {str(e)}"))
+                    return
             
             # Fill form fields
             self.title.setText(entry_data.get("title", ""))
@@ -279,12 +361,15 @@ class EntryForm(QWidget):
             self.url.setText(entry_data.get("url", ""))
             
             # Set category if exists
-            category = entry_data.get("category", "")
-            index = self.category.findText(category)
-            if index >= 0:
-                self.category.setCurrentIndex(index)
+            if 'category_id' in entry_data and entry_data['category_id'] is not None:
+                category_data = {
+                    'id': entry_data['category_id'],
+                    'name': entry_data.get('category', '')
+                }
+                self.set_category(category_data)
             else:
-                self.category.setCurrentText(category)
+                # Default to "None"
+                self.category.setCurrentIndex(0)
             
             self.notes.setText(entry_data.get("notes", ""))
             
@@ -296,9 +381,30 @@ class EntryForm(QWidget):
             self.set_mode("view")
             
         except APIError as e:
-            QMessageBox.critical(self, "Error", f"Failed to load entry: {e.message}")
+            self.show_error(e)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load entry: {str(e)}")
+            self.show_error(e)
+        finally:
+            self.show_loading(False)
+
+    def set_category(self, category_data: dict):
+        """Set the category selection"""
+        if not category_data or 'id' not in category_data:
+            # Set to "None"
+            self.category.setCurrentIndex(0)
+            return
+        
+        # Find and select the category
+        category_id = category_data['id']
+        for i in range(self.category.count()):
+            if self.category.itemData(i) == category_id:
+                self.category.setCurrentIndex(i)
+                return
+        
+        # If not found, add it
+        if 'name' in category_data:
+            self.category.addItem(category_data['name'], category_data['id'])
+            self.category.setCurrentIndex(self.category.count() - 1)
     
     @async_callback
     async def save_entry(self):
@@ -308,40 +414,31 @@ class EntryForm(QWidget):
             self.api_client = self.parent().api_client if self.parent() and hasattr(self.parent(), 'api_client') else None
         
         if not self.api_client:
-            QMessageBox.critical(self, "Error", "API client not available")
+            self.show_error(Exception("API client not available"))
             return
         
         # Validate required fields
         if not self.title.text().strip():
-            QMessageBox.warning(self, "Validation Error", "Title is required")
+            self.show_error(Exception("Title is required"))
             self.title.setFocus()
             return
         
-        # Get entry data
-        entry_data = {
-            "title": self.title.text().strip(),
-            "username": self.username.text().strip(),
-            "password": self.password.text(),
-            "url": self.url.text().strip(),
-            "category": self.category.currentText().strip(),
-            "notes": self.notes.toPlainText().strip(),
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        }
-        
         try:
-            # In a real implementation, we would encrypt the data here
-            # For prototype purposes, we just encode as JSON
-            encrypted_data = json.dumps(entry_data)
+            # Show loading
+            self.show_loading(True)
             
-            if self.current_mode == "add":
+            # Get entry data
+            entry_data = self.get_entry_data()
+            
+            if self.current_mode == "add" or not self.current_entry_id:
                 # Create new entry
-                result = await self.api_client.create_entry(encrypted_data)
+                result = await self.api_client.create_entry(entry_data)
                 self.current_entry_id = result.id
-                QMessageBox.information(self, "Success", "Entry created successfully")
+                self.show_success("Entry created successfully")
             else:
                 # Update existing entry
-                await self.api_client.update_entry(self.current_entry_id, encrypted_data)
-                QMessageBox.information(self, "Success", "Entry updated successfully")
+                await self.api_client.update_entry(self.current_entry_id, entry_data)
+                self.show_success("Entry updated successfully")
             
             # Switch to view mode
             self.set_mode("view")
@@ -350,9 +447,11 @@ class EntryForm(QWidget):
             self.saved.emit(self.current_entry_id)
             
         except APIError as e:
-            QMessageBox.critical(self, "Error", f"Failed to save entry: {e.message}")
+            self.show_error(e)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save entry: {str(e)}")
+            self.show_error(e)
+        finally:
+            self.show_loading(False)
     
     @async_callback
     async def delete_entry(self):
@@ -385,3 +484,24 @@ class EntryForm(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to delete entry: {e.message}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete entry: {str(e)}")
+
+    def show_error(self, error: Exception):
+        """Display error message with appropriate styling"""
+        title = "Error"
+        message = str(error)
+        
+        # Show error message
+        QMessageBox.critical(self, title, message)
+    
+    def show_success(self, message: str):
+        """Display success message"""
+        QMessageBox.information(self, "Success", message)
+        
+    def show_loading(self, show: bool = True):
+        """Show/hide loading indicator"""
+        if show:
+            self.progress_bar.setRange(0, 0)  # Infinite progress
+            self.progress_bar.show()
+        else:
+            self.progress_bar.hide()
+            self.progress_bar.setRange(0, 100)  # Reset to normal range

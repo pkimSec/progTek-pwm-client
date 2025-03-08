@@ -76,3 +76,11 @@ class APIEndpoints:
 
     def entry_version(self, entry_id: int, version_id: int) -> str:
         return self._url(f'/api/vault/entries/{entry_id}/versions/{version_id}')
+    
+    # Category endpoints
+    @property
+    def categories(self) -> str:
+        return self._url('/api/categories')
+        
+    def category(self, category_id: int) -> str:
+        return self._url(f'/api/categories/{category_id}')
