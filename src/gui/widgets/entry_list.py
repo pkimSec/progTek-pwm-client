@@ -1,9 +1,9 @@
-from PyQt6.QtWidgets import (
-    QListWidget, QListWidgetItem, QMenu, QAbstractItemView,
-    QMessageBox, QVBoxLayout, QLabel, QWidget, QHBoxLayout
+from PyQt6.QtWidgets import (  
+    QListWidget, QListWidgetItem, QMenu, QAbstractItemView,  
+    QVBoxLayout, QLabel, QWidget, QHBoxLayout  
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtGui import QAction
 
 from api.models import PasswordEntry
 import json
@@ -18,7 +18,7 @@ class EntryListItem(QListWidgetItem):
         
         # Try to extract title from encrypted data if possible
         # This would normally be decrypted using the master password
-        # For prototype purposes, we just use a placeholder title
+        # For prototype purposes, just use a placeholder title
         self.title = f"Entry {entry.id}"
         
         # Set item text and other properties
@@ -147,7 +147,7 @@ class EntryList(QWidget):
             # Apply category filter (except "all")
             if self.current_category != "all":
                 # This would check if the entry belongs to the category
-                # For prototype purposes, we show all entries for any category
+                # For prototype purposes, show all entries for any category
                 pass
             
             # Apply text filter

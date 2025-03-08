@@ -5,8 +5,10 @@ import weakref
 from typing import Optional, Dict, Any, Union, ClassVar
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
+from typing import List, Dict, Any, Optional
 
 from .endpoints import APIEndpoints
+from api.models import User
 from .models import (
     LoginRequest, LoginResponse, RegisterRequest,
     PasswordEntry, EntryVersion, APIError
@@ -53,7 +55,7 @@ class APIClient:
         cls._instance_cache.clear()
 
     async def ensure_session(self):
-        """Ensure we have a valid session"""
+        """Ensure its a valid session"""
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
             self.session = aiohttp.ClientSession(timeout=timeout)
@@ -72,6 +74,27 @@ class APIClient:
     def set_master_password(self, password: str) -> None:
         """Set master password for vault operations"""
         self._master_password = password
+
+    async def list_invite_codes(self) -> List[Dict[str, Any]]:
+        """List all invite codes (admin only)"""
+        try:
+            response = await self._request('GET', self.endpoints.invites)
+            return response['invite_codes']
+        except Exception as e:
+            print(f"Error listing invite codes: {str(e)}")
+            # Return empty list if endpoint not yet implemented
+            return []
+
+    async def deactivate_invite_code(self, invite_code: str) -> Dict[str, str]:
+        """Deactivate an invite code (admin only)"""
+        try:
+            return await self._request(
+                'DELETE', 
+                self.endpoints.invite_code(invite_code)
+            )
+        except Exception as e:
+            print(f"Error deactivating invite code: {str(e)}")
+            raise e
 
     async def __aenter__(self):
         """Context manager entry - create session"""
@@ -262,6 +285,29 @@ class APIClient:
             invite_code=invite_code
         ).model_dump()
         return await self._request('POST', self.endpoints.register, data, include_auth=False)
+
+    async def list_users(self) -> List[Dict[str, Any]]:
+        """Get list of all users (admin only)"""
+        response = await self._request('GET', self.endpoints.users)
+        return response['users']
+
+    async def get_user(self, user_id: int) -> Dict[str, Any]:
+        """Get user details by ID (admin only)"""
+        return await self._request('GET', self.endpoints.user(user_id))
+
+    async def update_user_status(self, user_id: int, is_active: bool) -> Dict[str, str]:
+        """Enable or disable a user account (admin only)"""
+        data = {'is_active': is_active}
+        return await self._request('PATCH', self.endpoints.user(user_id), data)
+
+    async def update_user_role(self, user_id: int, role: str) -> Dict[str, str]:
+        """Update user role (admin only)"""
+        data = {'role': role}
+        return await self._request('PATCH', self.endpoints.user(user_id), data)
+
+    async def delete_user(self, user_id: int) -> Dict[str, str]:
+        """Delete a user (admin only)"""
+        return await self._request('DELETE', self.endpoints.user(user_id))
 
     async def create_invite(self) -> str:
         """Create invite code (admin only)"""

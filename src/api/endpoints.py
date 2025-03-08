@@ -26,6 +26,13 @@ class APIEndpoints:
         return self._url('/api/register')
 
     @property
+    def users(self) -> str:
+        return self._url('/api/users')
+
+    def user(self, user_id: int) -> str:
+        return self._url(f'/api/users/{user_id}')
+
+    @property
     def create_invite(self) -> str:
         return self._url('/api/invite')
 
@@ -36,6 +43,13 @@ class APIEndpoints:
     @property
     def vault_salt(self) -> str:
         return self._url('/api/vault/salt')
+
+    @property
+    def invites(self) -> str:
+        return self._url('/api/invites')
+
+    def invite_code(self, code: str) -> str:
+        return self._url(f'/api/invites/{code}')
 
     @property
     def vault_entries(self) -> str:
