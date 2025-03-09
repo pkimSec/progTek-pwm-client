@@ -18,6 +18,8 @@ class Vault:
         self._crypto = get_vault_crypto()
         self._unlocked = False
         self._entries_cache = {}  # Cache for decrypted entries
+        self._last_unlock_attempt_time = None
+        self._unlock_params = None  # Store the last params used to unlock
     
     def unlock(self, master_password: str, salt: str) -> bool:
         """
@@ -30,6 +32,12 @@ class Vault:
         Returns:
             True if successful, False otherwise
         """
+        import time
+        self._last_unlock_attempt_time = time.time()
+        
+        # Save unlock parameters for potential retry
+        self._unlock_params = (master_password, salt)
+        
         if not master_password:
             print("Cannot unlock vault: Master password is empty")
             return False
@@ -43,7 +51,7 @@ class Vault:
             # Derive encryption key
             self._crypto.derive_key(master_password, salt)
             self._unlocked = True
-            print("Vault unlocked successfully")
+            print(f"Vault unlocked successfully at {self._last_unlock_attempt_time}")
             return True
         except Exception as e:
             print(f"Error unlocking vault: {e}")
@@ -51,6 +59,15 @@ class Vault:
             traceback.print_exc()
             self._unlocked = False
             return False
+
+    def retry_unlock(self) -> bool:
+        """Retry unlocking the vault with the last parameters"""
+        if not self._unlock_params:
+            print("No previous unlock parameters found")
+            return False
+            
+        print("Retrying vault unlock with previous parameters")
+        return self.unlock(*self._unlock_params)
     
     def lock(self) -> None:
         """
@@ -63,10 +80,26 @@ class Vault:
         self._entries_cache.clear()
         
         self._unlocked = False
+        print("Vault locked")
     
     def is_unlocked(self) -> bool:
         """Check if vault is unlocked"""
-        return self._unlocked and self._crypto.has_key()
+        crypto_has_key = self._crypto.has_key()
+        result = self._unlocked and crypto_has_key
+        
+        if not result:
+            print(f"Vault is locked: _unlocked={self._unlocked}, crypto_has_key={crypto_has_key}")
+            if self._last_unlock_attempt_time:
+                import time
+                print(f"Last unlock attempt was {time.time() - self._last_unlock_attempt_time:.2f} seconds ago")
+                
+            # If we have unlock params and the vault should be unlocked but isn't,
+            # retry unlocking automatically
+            if self._unlock_params and self._unlocked and not crypto_has_key:
+                print("Auto-retrying vault unlock")
+                return self.retry_unlock()
+        
+        return result
     
     def encrypt_entry(self, entry_data: Dict[str, Any]) -> str:
         """
@@ -98,7 +131,11 @@ class Vault:
             Decrypted entry as dictionary
         """
         if not self.is_unlocked():
-            raise ValueError("Vault is locked. Unlock it first.")
+            # Try unlocking one more time if we have parameters
+            if self._unlock_params and self.retry_unlock():
+                print("Successfully unlocked vault on retry during decrypt")
+            else:
+                raise ValueError("Vault is locked. Unlock it first.")
         
         # Parse JSON
         try:

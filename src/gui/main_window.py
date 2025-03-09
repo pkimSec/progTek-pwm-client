@@ -68,10 +68,11 @@ class MainWindow(QMainWindow):
             master_password = self.user_session.master_password
             vault_salt = self.user_session.vault_salt
             
+            print(f"Initializing vault - Master password: {bool(master_password)}, Salt: {bool(vault_salt)}")
+            
             # If we don't have a salt yet, we need to get it from the server
             if not vault_salt:
                 print("No vault salt available, attempting to retrieve from server")
-                # This will be executed asynchronously
                 self.get_vault_salt()
                 return
             
@@ -80,14 +81,25 @@ class MainWindow(QMainWindow):
             if master_password and vault_salt:
                 if vault.unlock(master_password, vault_salt):
                     print("Vault unlocked successfully")
+                    self.status_bar.showMessage("Vault unlocked", 3000)
+                    
+                    # Also set the master password on the API client for future use
+                    if hasattr(self.api_client, 'set_master_password'):
+                        self.api_client.set_master_password(master_password)
                 else:
                     print("Failed to unlock vault")
+                    self.status_bar.showMessage("Failed to unlock vault", 3000)
             else:
-                print("Missing master password or salt")
+                if not master_password:
+                    print("Missing master password")
+                if not vault_salt:
+                    print("Missing vault salt")
+                self.status_bar.showMessage("Cannot unlock vault: Missing credentials", 3000)
         except Exception as e:
             print(f"Error initializing vault: {str(e)}")
             import traceback
             traceback.print_exc()
+            self.status_bar.showMessage(f"Error initializing vault: {str(e)}", 5000)
     
     def setup_ui(self):
         """Initialize user interface"""
@@ -324,17 +336,22 @@ class MainWindow(QMainWindow):
         """Get vault salt from server"""
         try:
             salt = await self.api_client.get_vault_salt()
-            print(f"Retrieved vault salt: {salt}")
+            print(f"Retrieved vault salt: {salt[:10] if salt else 'None'}")
             
-            # Store salt in session
-            self.user_session.set_vault_salt(salt)
-            
-            # Now initialize vault
-            self.initialize_vault()
+            if salt:
+                # Store salt in session
+                self.user_session.set_vault_salt(salt)
+                
+                # Now retry vault initialization
+                self.initialize_vault()
+            else:
+                print("No salt received from server")
+                self.status_bar.showMessage("Failed to get vault salt", 3000)
         except Exception as e:
             print(f"Error getting vault salt: {str(e)}")
             import traceback
             traceback.print_exc()
+            self.status_bar.showMessage(f"Error getting vault salt: {str(e)}", 5000)
     
     def closeEvent(self, event):
         """Handle window close event"""

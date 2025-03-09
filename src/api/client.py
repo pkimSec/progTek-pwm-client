@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, Union, ClassVar
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 from typing import List, Dict, Any, Optional
+from utils.async_utils import async_callback
 
 from .endpoints import APIEndpoints
 from api.models import User
@@ -193,9 +194,9 @@ class APIClient:
         if include_auth and self._access_token:
             headers['Authorization'] = f'Bearer {self._access_token}'
         
-        # Add session token if available
+        # Add session token if available - use proper header name
         if self._session_token:
-            headers['X-Session-ID'] = self._session_token
+            headers['X-API-Session-Token'] = self._session_token
             
         return headers
 
@@ -266,7 +267,12 @@ class APIClient:
                     # Try to reauthenticate and retry the request
                     try:
                         # Relogin with stored credentials
-                        await self.login(self._user_email, self._master_password)
+                        login_response = await self.login(self._user_email, self._master_password)
+                        
+                        # Important: Update session token from login response
+                        if hasattr(login_response, 'session_token') and login_response.session_token:
+                            self._session_token = login_response.session_token
+                            print(f"Updated session token after reauthentication: {self._session_token}")
                         
                         # Retry the request with new token
                         return await self._request(method, url, data, include_auth, False)
@@ -514,19 +520,43 @@ class APIClient:
         
         return response
 
-    async def get_vault_salt(self) -> str:
+    @async_callback
+    async def get_vault_salt(self):
         """
         Get vault salt for key derivation.
         Fetches salt from server and caches it for future use.
         """
-        response = await self._request('GET', self.endpoints.vault_salt)
-        salt = response['salt']
-        
-        # Store salt for later use
-        if hasattr(self.user_session, 'set_vault_salt'):
-            self.user_session.set_vault_salt(salt)
-        
-        return salt
+        try:
+            response = await self._request('GET', self.endpoints.vault_salt)
+            salt = response.get('salt')
+            if not salt:
+                print("Warning: Server returned empty salt")
+                return None
+                
+            print(f"Retrieved vault salt from server: {salt[:10]}...")
+            
+            # Store salt for later use if we have a user session
+            if hasattr(self, 'user_session') and self.user_session and hasattr(self.user_session, 'set_vault_salt'):
+                self.user_session.set_vault_salt(salt)
+                print("Stored salt in user session")
+            else:
+                print("Warning: Cannot store salt in user session")
+            
+            # Try to unlock vault if we have a master password
+            if self._master_password:
+                from crypto.vault import get_vault
+                vault = get_vault()
+                if vault.unlock(self._master_password, salt):
+                    print("Vault unlocked successfully after getting salt")
+                else:
+                    print("Failed to unlock vault after getting salt")
+            
+            return salt
+        except Exception as e:
+            print(f"Error getting vault salt: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     async def create_entry(self, entry_data: Dict[str, Any]) -> PasswordEntry:
         """

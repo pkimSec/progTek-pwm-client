@@ -180,7 +180,7 @@ class LoginDialog(BaseDialog):
     
     @async_callback
     async def test_connection(self):
-        """Test connection to server"""
+        """Test connection to server using the ping endpoint"""
         print("Starting connection test")
         server_url = self.server_url.text().strip()
         if not server_url:
@@ -209,13 +209,15 @@ class LoginDialog(BaseDialog):
             print("Creating API session...")
             await self.api_client.create_session()
             
-            print("Testing login endpoint...")
-            try:
-                await self.api_client.login("test", "test")
-            except APIError as e:
-                print(f"Received API error: {e.status_code} - {e.message}")
-                # If 401, the connection works (authentication failed but API is responding)
-                if e.status_code == 401:
+            print("Sending ping request...")
+            # Use the new ping endpoint instead of trying to login
+            ping_url = f"{server_url}/api/ping"
+            
+            # Create a simple request without authentication
+            async with self.api_client.session.get(ping_url) as resp:
+                print(f"Ping response status: {resp.status}")
+                
+                if resp.status == 200:
                     self.is_connected = True
                     self.status_label.setText("Server status: Connected")
                     self.status_label.setStyleSheet("color: green")
@@ -228,7 +230,18 @@ class LoginDialog(BaseDialog):
                     self.config.api_base_url = server_url
                     self.config.save()
                     return
-                raise e
+                    
+                try:
+                    data = await resp.json()
+                    print(f"Ping response data: {data}")
+                except:
+                    print("Could not parse response as JSON")
+                    
+                # If we get here, connection failed
+                self.is_connected = False
+                self.status_label.setText(f"Server status: Connection failed ({resp.status})")
+                self.status_label.setStyleSheet("color: red")
+                self.show_error(Exception(f"Server connection failed with status {resp.status}"))
                 
         except Exception as e:
             print(f"Error during connection test: {str(e)}")

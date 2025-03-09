@@ -308,8 +308,9 @@ class PasswordManagerApp(QObject):
         print("Creating new API client with fresh token")
         self.api_client = APIClient(self.config.api_base_url)
         self.api_client._access_token = response.access_token
+        self.api_client._session_token = getattr(response, 'session_token', None)
         self.api_client.set_master_password(master_password)
-    
+        
         # Save the email from the login dialog
         user_email = None
         if login_dialog_to_close and hasattr(login_dialog_to_close, 'email'):
@@ -322,7 +323,7 @@ class PasswordManagerApp(QObject):
         # Create user session
         config_dir = Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config')
         config_dir = config_dir / 'password_manager'
-    
+        
         print("Creating new user session")
         self.user_session = UserSession(
             user_id=response.user_id,
@@ -333,9 +334,24 @@ class PasswordManagerApp(QObject):
             email=user_email
         )
         self.user_session.save(config_dir)
-    
+        
+        # Immediately try to get the vault salt
+        async def fetch_salt():
+            try:
+                salt = await self.api_client.get_vault_salt()
+                if salt:
+                    print(f"Retrieved initial vault salt: {salt}")
+                    self.user_session.set_vault_salt(salt)
+                    self.user_session.save(config_dir)
+            except Exception as e:
+                print(f"Error fetching initial salt: {str(e)}")
+                
+        # Execute this immediately
+        from utils.async_utils import standalone_async_task
+        standalone_async_task(fetch_salt)
+        
         print("Session saved, preparing to show main window")
-    
+        
         # Close the login dialog using a direct approach
         if login_dialog_to_close:
             try:
@@ -349,7 +365,7 @@ class PasswordManagerApp(QObject):
                 print("Login dialog scheduled for deletion")
             except Exception as e:
                 print(f"Error closing login dialog: {str(e)}")
-    
+        
         # Schedule showing the main window
         QTimer.singleShot(0, self.show_main_window)
         self.session_timer.start()
