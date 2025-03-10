@@ -301,14 +301,37 @@ class VaultView(QWidget):
     
     def add_entry(self):
         """Add a new entry"""
+        from crypto.vault import get_vault
+        vault = get_vault()
+        
         # Make sure vault is unlocked
-        if not get_vault().is_unlocked():
-            QMessageBox.warning(
-                self,
-                "Vault Locked",
-                "The vault is locked. Please unlock it before adding entries."
-            )
-            return
+        if not vault.is_unlocked():
+            # Try to unlock it with user session data
+            if hasattr(self, 'api_client') and hasattr(self.api_client, 'user_session'):
+                # Get vault unlock params from user session
+                master_password = self.api_client._master_password
+                vault_salt = None
+                
+                # Try to get salt from API or user session
+                if hasattr(self.user_session, 'vault_salt'):
+                    vault_salt = self.user_session.vault_salt
+                
+                if master_password and vault_salt:
+                    print(f"Attempting to unlock vault before adding entry...")
+                    if vault.unlock(master_password, vault_salt):
+                        print("Successfully unlocked vault before adding entry")
+                        # Continue with entry creation
+                    else:
+                        print("Failed to unlock vault with available credentials")
+                        self.show_vault_locked_message()
+                        return
+                else:
+                    print(f"Missing vault parameters - master_password: {bool(master_password)}, vault_salt: {bool(vault_salt)}")
+                    self.show_vault_locked_message()
+                    return
+            else:
+                self.show_vault_locked_message()
+                return
         
         # Clear the form and set mode to add
         self.entry_form.clear()
@@ -320,7 +343,86 @@ class VaultView(QWidget):
                 'name': self.entry_list.current_category_name
             }
             self.entry_form.set_category(category_data)
+
+    def show_vault_locked_message(self):
+        """Show message about vault being locked with options to unlock"""
+        from PyQt6.QtWidgets import QMessageBox, QPushButton
+        
+        # Create custom message box with unlock button
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle("Vault Locked")
+        msg_box.setText("The vault is locked. You need to unlock it before adding entries.")
+        msg_box.setInformativeText("Would you like to unlock the vault now?")
+        
+        # Add custom buttons
+        unlock_button = msg_box.addButton("Unlock Vault", QMessageBox.ButtonRole.AcceptRole)
+        cancel_button = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        
+        msg_box.exec()
+        
+        # Check which button was clicked
+        if msg_box.clickedButton() == unlock_button:
+            self.unlock_vault_manually()
     
+    def unlock_vault_manually(self):
+        """Prompt user for master password and unlock vault"""
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit, QMessageBox
+        from crypto.vault import get_vault
+        
+        # Ask for master password
+        master_password, ok = QInputDialog.getText(
+            self, 
+            "Unlock Vault",
+            "Enter your master password:",
+            QLineEdit.EchoMode.Password
+        )
+        
+        if ok and master_password:
+            # Get salt from user session
+            vault_salt = None
+            if hasattr(self.user_session, 'vault_salt'):
+                vault_salt = self.user_session.vault_salt
+            
+            if not vault_salt and hasattr(self.api_client, 'get_vault_salt'):
+                # Try to get salt from server
+                try:
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    vault_salt = loop.run_until_complete(self.api_client.get_vault_salt())
+                    loop.close()
+                    
+                    # Store in user session if successful
+                    if vault_salt and hasattr(self.user_session, 'set_vault_salt'):
+                        self.user_session.set_vault_salt(vault_salt)
+                except Exception as e:
+                    print(f"Error getting vault salt: {e}")
+            
+            if vault_salt:
+                # Try to unlock the vault
+                vault = get_vault()
+                if vault.unlock(master_password, vault_salt):
+                    QMessageBox.information(
+                        self,
+                        "Vault Unlocked",
+                        "The vault has been successfully unlocked."
+                    )
+                    # Store master password in API client for future use
+                    if hasattr(self.api_client, 'set_master_password'):
+                        self.api_client.set_master_password(master_password)
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Unlock Failed",
+                        "Failed to unlock the vault. Please check your master password."
+                    )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Missing Vault Salt",
+                    "Vault salt is not available. Please try logging out and back in."
+                )
+
     def on_global_search(self, search_text: str):
         """Handle global search"""
         self.entry_list.filter_entries(search_text)
