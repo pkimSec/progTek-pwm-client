@@ -278,6 +278,10 @@ class LoginDialog(BaseDialog):
             self.password.setEnabled(False)
             self.login_btn.setEnabled(False)
 
+            # Ensure API client has a valid session
+            await self.api_client.ensure_session()
+            
+            # Perform login
             response = await self.api_client.login(email, password)
             print("Login successful")
 
@@ -288,12 +292,14 @@ class LoginDialog(BaseDialog):
             else:
                 self.config.last_email = ""
 
+            # Store master password in API client for future use
+            self.api_client.set_master_password(password)
+            
             # Save successful login in config
             self.config.save()
 
             # Use the new method to handle login success
             self.handle_login_success(response, password)
-
             
         except APIError as e:
             print(f"Login failed with API error: {e.status_code} - {e.message}")

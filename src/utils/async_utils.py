@@ -3,7 +3,7 @@ from functools import wraps
 from typing import Callable, Any
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 import traceback
-
+    
 class AsyncRunner(QObject):
     """Utility class to run async functions from Qt"""
     
@@ -18,21 +18,30 @@ class AsyncRunner(QObject):
     def run(self, coro):
         """Run coroutine and emit result or error"""
         try:
+<<<<<<< Updated upstream
             # Create or get event loop safely
             loop = None
+=======
+            # Check if we're in an event loop already
+>>>>>>> Stashed changes
             try:
                 # Check if we can get the existing event loop
                 loop = asyncio.get_event_loop()
+<<<<<<< Updated upstream
                 
                 # Check if the loop is already running
                 if loop.is_running():
                     # Create a new loop for this task
                     loop = asyncio.new_event_loop()
                     print("Created new event loop (existing loop was running)")
+=======
+                is_running = loop.is_running()
+>>>>>>> Stashed changes
             except RuntimeError:
-                # No event loop in this thread, create a new one
+                # No event loop in this thread
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+<<<<<<< Updated upstream
                 print("Created new event loop (no existing loop)")
             
             # Store loop for potential cleanup
@@ -42,12 +51,46 @@ class AsyncRunner(QObject):
             result = loop.run_until_complete(coro)
             self.finished.emit(result)
             
+=======
+                is_running = False
+            
+            # If the loop is already running, we need a new approach
+            if is_running:
+                # Create and use a concurrent.futures executor
+                import concurrent.futures
+                import functools
+                
+                async def _run_coro_with_result():
+                    try:
+                        result = await coro
+                        return result
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
+                        raise e
+                
+                # Create a new loop in a separate thread
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(self._run_in_new_loop, _run_coro_with_result())
+                    try:
+                        result = future.result()
+                        self.finished.emit(result)
+                    except Exception as e:
+                        print(f"Error in thread pool execution: {e}")
+                        self.error.emit(e)
+            else:
+                # Loop is not running, use it directly
+                result = loop.run_until_complete(coro)
+                self.finished.emit(result)
+                
+>>>>>>> Stashed changes
         except Exception as e:
             print(f"Error in AsyncRunner.run: {e}")
             try:
                 self.error.emit(e)
             except RuntimeError as emit_error:
                 print(f"Error emitting error signal: {emit_error}")
+<<<<<<< Updated upstream
         finally:
             # Clean up loop if we created a new one
             if self.loop and self.loop != asyncio.get_event_loop():
@@ -56,6 +99,19 @@ class AsyncRunner(QObject):
                     print("Closed temporary event loop")
                 except Exception as close_error:
                     print(f"Error closing event loop: {close_error}")
+=======
+    
+    def _run_in_new_loop(self, coro):
+        """Run a coroutine in a new event loop in the current thread"""
+        # Create new loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+>>>>>>> Stashed changes
 
 def async_callback(func: Callable) -> Callable:
     """

@@ -308,8 +308,22 @@ class PasswordManagerApp(QObject):
         print("Creating new API client with fresh token")
         self.api_client = APIClient(self.config.api_base_url)
         self.api_client._access_token = response.access_token
+<<<<<<< Updated upstream
         self.api_client._session_token = getattr(response, 'session_token', None)
         self.api_client.set_master_password(master_password)
+=======
+        
+        # Explicitly get the session_token from response or use getattr with None default
+        session_token = getattr(response, 'session_token', None)
+        if not session_token and hasattr(response, '__dict__'):
+            # Try direct dictionary access
+            session_token = response.__dict__.get('session_token')
+        if not session_token:
+            print("WARNING: No session token found in login response!")
+            
+        self.api_client._session_token = session_token
+        print(f"API client configured with session token: {session_token}")
+>>>>>>> Stashed changes
         
         # Save the email from the login dialog
         user_email = None
@@ -329,7 +343,7 @@ class PasswordManagerApp(QObject):
             user_id=response.user_id,
             role=response.role,
             access_token=response.access_token,
-            session_token=getattr(response, 'session_token', None),
+            session_token=session_token,
             master_password=master_password,
             email=user_email
         )
@@ -338,7 +352,31 @@ class PasswordManagerApp(QObject):
         # Immediately try to get the vault salt
         async def fetch_salt():
             try:
+<<<<<<< Updated upstream
                 salt = await self.api_client.get_vault_salt()
+=======
+                print("Starting vault salt retrieval")
+                # Check if API client is properly initialized
+                if not self_param.api_client:
+                    print("API client not available for fetching vault salt")
+                    # Close the login dialog and show the main window anyway
+                    if login_dialog_to_close:
+                        try:
+                            print("Closing login dialog")
+                            login_dialog_to_close.hide()
+                            login_dialog_to_close.close()
+                            login_dialog_to_close.deleteLater()
+                            print("Login dialog scheduled for deletion")
+                        except Exception as e:
+                            print(f"Error closing login dialog: {str(e)}")
+                    # Show main window despite the error
+                    self_param.show_main_window()
+                    self_param.session_timer.start()
+                    return None
+                
+                # Attempt to get vault salt
+                salt = await self_param.api_client.get_vault_salt()
+>>>>>>> Stashed changes
                 if salt:
                     print(f"Retrieved initial vault salt: {salt}")
                     self.user_session.set_vault_salt(salt)

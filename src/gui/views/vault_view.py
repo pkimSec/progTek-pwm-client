@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QSplitter, QMessageBox, QFrame,
     QToolBar, QLineEdit, QDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QAction, QIcon
 
 from api.client import APIClient
@@ -28,8 +28,8 @@ class VaultView(QWidget):
             # Initialize UI components
             self.setup_ui()
             
-            # Initialize components
-            self.load_data()
+            # Initialize components - delay this slightly to ensure UI is ready
+            QTimer.singleShot(100, self.load_data)
         except Exception as e:
             print(f"Error initializing VaultView: {str(e)}")
             import traceback
@@ -178,10 +178,21 @@ class VaultView(QWidget):
             # Use safe status update method
             self.safe_update_status("Loading vault data...")
             
-            # Check if entry_list is still valid
+            # Check if entry_list is initialized
             if hasattr(self, 'entry_list') and self.entry_list:
+                # Make sure the entry_list has an API client
+                if not hasattr(self.entry_list, 'api_client') or not self.entry_list.api_client:
+                    self.entry_list.api_client = self.api_client
+                    print("Assigned API client to entry_list")
+                
                 try:
-                    # Load entries
+                    # Load categories first
+                    if hasattr(self, 'category_tree') and self.category_tree:
+                        if not hasattr(self.category_tree, 'api_client') or not self.category_tree.api_client:
+                            self.category_tree.api_client = self.api_client
+                        await self.category_tree.load_categories()
+                    
+                    # Now load entries
                     await self.entry_list.load_entries()
                     
                     # Update entry count
@@ -443,4 +454,153 @@ class VaultView(QWidget):
             
         except Exception as e:
             self.status_label.setText(f"Error: {str(e)}")
+<<<<<<< Updated upstream
             QMessageBox.critical(self, "Error", f"Failed to refresh data: {str(e)}")
+=======
+
+    def add_test_entry(self):
+        """Add a test entry for debugging purposes"""
+        try:
+            # First make sure vault is unlocked
+            from crypto.vault import get_vault
+            vault = get_vault()
+            if not vault.is_unlocked():
+                print("Cannot add test entry - vault is locked")
+                self.safe_update_status("Error: Vault is locked")
+                
+                # Try to unlock the vault
+                if hasattr(self, 'user_session') and self.user_session:
+                    master_password = self.user_session.master_password
+                    vault_salt = self.user_session.vault_salt
+                    
+                    if master_password and vault_salt:
+                        print(f"Attempting to unlock vault with stored credentials")
+                        if vault.unlock(master_password, vault_salt):
+                            print("Vault unlocked successfully")
+                        else:
+                            # Show message to user and return
+                            QMessageBox.warning(
+                                self, "Vault Locked", 
+                                "The vault is locked. Please log out and log in again to unlock it."
+                            )
+                            return
+                    else:
+                        # Show message to user and return
+                        QMessageBox.warning(
+                            self, "Vault Locked", 
+                            "The vault is locked. Please log out and log in again to unlock it."
+                        )
+                        return
+                else:
+                    # Show message to user and return
+                    QMessageBox.warning(
+                        self, "Vault Locked", 
+                        "The vault is locked. Please log out and log in again to unlock it."
+                    )
+                    return
+                    
+            # Create entry data
+            test_entry = {
+                "title": f"Test Entry {datetime.now().strftime('%H:%M:%S')}",
+                "username": "testuser",
+                "password": "testpassword",
+                "url": "https://example.com",
+                "notes": "This is a test entry created for debugging purposes",
+                "category_id": None,
+                "category": "None"
+            }
+            
+            # Encrypt entry data
+            encrypted_data = vault.encrypt_entry(test_entry)
+            
+            # Create API request - we need to serialize to JSON
+            import json
+            encrypted_json = json.dumps(encrypted_data)
+            
+            # Create async task to add entry
+            @async_callback
+            async def create_test_entry_async(self_param, encrypted_json):
+                try:
+                    # Ensure API client is available
+                    if not hasattr(self_param, 'api_client') or not self_param.api_client:
+                        print("API client not available for creating test entry")
+                        QMessageBox.critical(
+                            self_param, "Error", 
+                            "API client not available. Please try again."
+                        )
+                        return
+                        
+                    # Create the entry
+                    entry = await self_param.api_client.create_entry(encrypted_json)
+                    print(f"Created test entry with ID: {entry.id}")
+                    
+                    # Show success message
+                    QMessageBox.information(
+                        self_param, "Success",
+                        f"Test entry created successfully (ID: {entry.id})."
+                    )
+                    
+                    # Try to reload entries
+                    if hasattr(self_param, 'entry_list') and self_param.entry_list:
+                        # Make sure entry_list has API client
+                        if not hasattr(self_param.entry_list, 'api_client') or not self_param.entry_list.api_client:
+                            self_param.entry_list.api_client = self_param.api_client
+                            
+                        try:
+                            await self_param.entry_list.load_entries()
+                        except Exception as load_error:
+                            print(f"Error reloading entries: {str(load_error)}")
+                except Exception as e:
+                    print(f"Error creating test entry: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # Show error dialog
+                    QMessageBox.critical(
+                        self_param, "Error", 
+                        f"Failed to create test entry: {str(e)}"
+                    )
+            
+            # Start the async task
+            create_test_entry_async(self, encrypted_json)
+            
+        except Exception as e:
+            print(f"Error in add_test_entry: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Show error dialog
+            QMessageBox.critical(
+                self, "Error", 
+                f"Error preparing test entry: {str(e)}"
+            )
+
+    @async_callback
+    async def create_test_entry_async(self_param, encrypted_json):
+        """Async function to create a test entry"""
+        try:
+            # Make sure we have an API client
+            if not hasattr(self_param, 'api_client') or not self_param.api_client:
+                print("No API client available")
+                return
+                
+            # Send the request
+            entry = await self_param.api_client.create_entry(encrypted_json)
+            print(f"Created test entry with ID: {entry.id}")
+            self_param.safe_update_status(f"Created test entry with ID: {entry.id}")
+            
+            # Reload entries to show the new entry
+            if hasattr(self_param, 'entry_list') and self_param.entry_list:
+                # Make sure entry_list has API client
+                if not hasattr(self_param.entry_list, 'api_client') or not self_param.entry_list.api_client:
+                    self_param.entry_list.api_client = self_param.api_client
+                
+                await self_param.entry_list.load_entries()
+                self_param.update_entry_count()
+        except Exception as e:
+            print(f"Error creating test entry: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            if hasattr(self_param, 'safe_update_status'):
+                self_param.safe_update_status(f"Error creating test entry: {str(e)}")
+>>>>>>> Stashed changes

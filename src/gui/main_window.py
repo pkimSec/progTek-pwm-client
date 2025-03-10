@@ -65,8 +65,8 @@ class MainWindow(QMainWindow):
             from crypto.vault import get_vault
             
             # Get master password and salt
-            master_password = self.user_session.master_password
-            vault_salt = self.user_session.vault_salt
+            master_password = self.user_session.master_password if hasattr(self.user_session, 'master_password') else None
+            vault_salt = self.user_session.vault_salt if hasattr(self.user_session, 'vault_salt') else None
             
             print(f"Initializing vault - Master password: {bool(master_password)}, Salt: {bool(vault_salt)}")
             
@@ -335,6 +335,13 @@ class MainWindow(QMainWindow):
     async def get_vault_salt(self):
         """Get vault salt from server"""
         try:
+            # Make sure API client is available
+            if not self.api_client:
+                print("No API client available for getting vault salt")
+                self.status_bar.showMessage("Error: API client not available", 5000)
+                return None
+                
+            # Try to get salt from server
             salt = await self.api_client.get_vault_salt()
             print(f"Retrieved vault salt: {salt[:10] if salt else 'None'}")
             
@@ -343,15 +350,36 @@ class MainWindow(QMainWindow):
                 self.user_session.set_vault_salt(salt)
                 
                 # Now retry vault initialization
-                self.initialize_vault()
+                from crypto.vault import get_vault
+                vault = get_vault()
+                
+                # Make sure we have a master password
+                if self.user_session.master_password:
+                    if vault.unlock(self.user_session.master_password, salt):
+                        print("Vault unlocked successfully after getting salt")
+                        self.status_bar.showMessage("Vault unlocked successfully", 3000)
+                        
+                        # Also set the master password on the API client for future use
+                        if hasattr(self.api_client, 'set_master_password'):
+                            self.api_client.set_master_password(self.user_session.master_password)
+                    else:
+                        print("Failed to unlock vault with retrieved salt")
+                        self.status_bar.showMessage("Failed to unlock vault", 3000)
+                else:
+                    print("Missing master password for unlocking vault")
+                    self.status_bar.showMessage("Missing master password", 3000)
+                    
+                return salt
             else:
                 print("No salt received from server")
                 self.status_bar.showMessage("Failed to get vault salt", 3000)
+                return None
         except Exception as e:
             print(f"Error getting vault salt: {str(e)}")
             import traceback
             traceback.print_exc()
             self.status_bar.showMessage(f"Error getting vault salt: {str(e)}", 5000)
+            return None
     
     def closeEvent(self, event):
         """Handle window close event"""

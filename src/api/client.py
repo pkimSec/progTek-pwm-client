@@ -226,92 +226,92 @@ class APIClient:
         return data
 
     async def _request(
-        self,
-        method: str,
-        url: str,
-        data: Optional[Dict] = None,
-        include_auth: bool = True,
-        retry_auth: bool = True
-    ) -> Any:
-        """Make HTTP request to API with optional token refresh"""
-        print(f"=== API Request: {method} {url} ===")
-        await self.ensure_session()
+            self,
+            method: str,
+            url: str,
+            data: Optional[Dict] = None,
+            include_auth: bool = True,
+            retry_auth: bool = True
+        ) -> Any:
+            """Make HTTP request to API with optional token refresh"""
+            print(f"=== API Request: {method} {url} ===")
+            await self.ensure_session()
 
-        try:
-            print(f"Preparing headers, auth included: {include_auth}")
-            headers = self._get_headers(include_auth)
-            print(f"Headers: {headers}")
-            if data:
-                print(f"Request data: {data}")
-            
-            print(f"Sending request to: {url}")
-            async with self.session.request(
-                method=method,
-                url=url,
-                json=data,
-                headers=headers,
-                ssl=False  # Disable SSL verification for local development
-            ) as response:
-                print(f"Response status: {response.status}")
+            try:
+                print(f"Preparing headers, auth included: {include_auth}")
+                headers = self._get_headers(include_auth)
+                print(f"Headers: {headers}")
+                if data:
+                    print(f"Request data: {data}")
                 
-                # Update rate limit info
-                self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
-                reset_time = response.headers.get('X-RateLimit-Reset')
-                if reset_time:
-                    self._rate_limit_reset = datetime.fromtimestamp(int(reset_time))
-
-                # Check for 401 Unauthorized - token might be expired
-                if response.status == 401 and retry_auth and self._master_password and self._user_email:
-                    print("Token expired. Attempting to reauthenticate...")
+                print(f"Sending request to: {url}")
+                async with self.session.request(
+                    method=method,
+                    url=url,
+                    json=data,
+                    headers=headers,
+                    ssl=False  # Disable SSL verification for local development
+                ) as response:
+                    print(f"Response status: {response.status}")
                     
-                    # Try to reauthenticate and retry the request
+                    # Update rate limit info
+                    self._rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 20))
+                    reset_time = response.headers.get('X-RateLimit-Reset')
+                    if reset_time:
+                        self._rate_limit_reset = datetime.fromtimestamp(int(reset_time))
+
+                    # Check for 401 Unauthorized - token might be expired
+                    if response.status == 401 and retry_auth and self._master_password and self._user_email:
+                        print("Token expired. Attempting to reauthenticate...")
+                        
+                        # Try to reauthenticate and retry the request
+                        try:
+                            # Relogin with stored credentials
+                            login_response = await self.login(self._user_email, self._master_password)
+                            
+                            # Important: Update session token from login response
+                            if login_response.session_token:
+                                self._session_token = login_response.session_token
+                                print(f"Stored session token from login: {self._session_token}")
+                            
+                            # Retry the request with new token
+                            return await self._request(method, url, data, include_auth, False)
+                        except Exception as e:
+                            print(f"Reauthentication failed: {str(e)}")
+                            # Let the original 401 error propagate
+
                     try:
-                        # Relogin with stored credentials
-                        login_response = await self.login(self._user_email, self._master_password)
-                        
-                        # Important: Update session token from login response
-                        if hasattr(login_response, 'session_token') and login_response.session_token:
-                            self._session_token = login_response.session_token
-                            print(f"Updated session token after reauthentication: {self._session_token}")
-                        
-                        # Retry the request with new token
-                        return await self._request(method, url, data, include_auth, False)
+                        print("Reading response content")
+                        try:
+                            data = await response.json()
+                            print(f"JSON response: {data}")
+                        except json.JSONDecodeError:
+                            data = await response.text()
+                            print(f"Text response: {data}")
+
+                        if not response.ok:
+                            print(f"Error response - Status: {response.status}, Message: {data}")
+                            raise APIError(
+                                message=data.get('message', 'Unknown error'),
+                                status_code=response.status
+                            )
+
+                        return data
                     except Exception as e:
-                        print(f"Reauthentication failed: {str(e)}")
-                        # Let the original 401 error propagate
-
-                try:
-                    print("Reading response content")
-                    try:
-                        data = await response.json()
-                        print(f"JSON response: {data}")
-                    except json.JSONDecodeError:
-                        data = await response.text()
-                        print(f"Text response: {data}")
-
-                    if not response.ok:
-                        print(f"Error response - Status: {response.status}, Message: {data}")
-                        raise APIError(
-                            message=data.get('message', 'Unknown error'),
-                            status_code=response.status
-                        )
-
-                    return data
-                except Exception as e:
-                    print(f"Error processing response: {str(e)}")
-                    raise
-                
-        except aiohttp.ClientError as e:
-            print(f"Network error: {str(e)}")
-            raise APIError(
-                message=f"Network error: {str(e)}",
-                status_code=0
-            )
-        except Exception as e:
-            print(f"Unexpected error: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            raise
+                        print(f"Error processing response: {str(e)}")
+                        raise
+                    
+            except aiohttp.ClientError as e:
+                print(f"Network error: {str(e)}")
+                raise APIError(
+                    message=f"Network error: {str(e)}",
+                    status_code=0
+                )
+            except Exception as e:
+                print(f"Unexpected error: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                raise
 
     async def login(self, email: str, password: str) -> LoginResponse:
         """Log in user and get access token"""
@@ -330,7 +330,13 @@ class APIClient:
         self._user_email = email
         self._master_password = password
         
-        return LoginResponse(**response)
+        # Create LoginResponse object
+        login_response = LoginResponse(**response)
+        
+        # Also store session token on the response object (for handle_login_success)
+        login_response.session_token = self._session_token
+        
+        return login_response
 
     async def list_categories(self) -> List[Dict[str, Any]]:
         """Get all categories for the current user"""
@@ -527,6 +533,16 @@ class APIClient:
         Fetches salt from server and caches it for future use.
         """
         try:
+            # Check if API client is properly initialized
+            if not self or not hasattr(self, '_request') or not callable(getattr(self, '_request', None)):
+                print("API client not properly initialized for get_vault_salt")
+                return None
+                
+            # Check if endpoints are properly initialized
+            if not hasattr(self, 'endpoints') or not hasattr(self.endpoints, 'vault_salt'):
+                print("API endpoints not properly initialized for get_vault_salt")
+                return None
+                
             response = await self._request('GET', self.endpoints.vault_salt)
             salt = response.get('salt')
             if not salt:
@@ -556,7 +572,7 @@ class APIClient:
             print(f"Error getting vault salt: {str(e)}")
             import traceback
             traceback.print_exc()
-            raise
+            return None
 
     async def create_entry(self, entry_data: Dict[str, Any]) -> PasswordEntry:
         """
