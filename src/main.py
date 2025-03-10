@@ -308,10 +308,6 @@ class PasswordManagerApp(QObject):
         print("Creating new API client with fresh token")
         self.api_client = APIClient(self.config.api_base_url)
         self.api_client._access_token = response.access_token
-<<<<<<< Updated upstream
-        self.api_client._session_token = getattr(response, 'session_token', None)
-        self.api_client.set_master_password(master_password)
-=======
         
         # Explicitly get the session_token from response or use getattr with None default
         session_token = getattr(response, 'session_token', None)
@@ -323,7 +319,6 @@ class PasswordManagerApp(QObject):
             
         self.api_client._session_token = session_token
         print(f"API client configured with session token: {session_token}")
->>>>>>> Stashed changes
         
         # Save the email from the login dialog
         user_email = None
@@ -352,9 +347,6 @@ class PasswordManagerApp(QObject):
         # Immediately try to get the vault salt
         async def fetch_salt():
             try:
-<<<<<<< Updated upstream
-                salt = await self.api_client.get_vault_salt()
-=======
                 print("Starting vault salt retrieval")
                 # Check if API client is properly initialized
                 if not self_param.api_client:
@@ -376,7 +368,6 @@ class PasswordManagerApp(QObject):
                 
                 # Attempt to get vault salt
                 salt = await self_param.api_client.get_vault_salt()
->>>>>>> Stashed changes
                 if salt:
                     print(f"Retrieved initial vault salt: {salt}")
                     self.user_session.set_vault_salt(salt)

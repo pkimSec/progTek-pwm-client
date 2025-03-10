@@ -454,9 +454,6 @@ class VaultView(QWidget):
             
         except Exception as e:
             self.status_label.setText(f"Error: {str(e)}")
-<<<<<<< Updated upstream
-            QMessageBox.critical(self, "Error", f"Failed to refresh data: {str(e)}")
-=======
 
     def add_test_entry(self):
         """Add a test entry for debugging purposes"""
@@ -603,4 +600,3 @@ class VaultView(QWidget):
             traceback.print_exc()
             if hasattr(self_param, 'safe_update_status'):
                 self_param.safe_update_status(f"Error creating test entry: {str(e)}")
->>>>>>> Stashed changes

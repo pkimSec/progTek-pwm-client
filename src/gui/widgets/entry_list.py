@@ -169,8 +169,6 @@ class EntryList(QWidget):
             self.status_label.setVisible(True)
             self.list.setVisible(False)
             
-<<<<<<< Updated upstream
-=======
             # Check if API client is available
             if not self.api_client:
                 # Try to get from parent if possible
@@ -186,7 +184,6 @@ class EntryList(QWidget):
                     self.status_label.setText("Error: API client not available")
                     return
             
->>>>>>> Stashed changes
             # Get entries from server
             entries = await self.api_client.list_entries()
             
@@ -196,15 +193,10 @@ class EntryList(QWidget):
         except Exception as e:
             import traceback
             traceback.print_exc()
-<<<<<<< Updated upstream
-            self.status_label.setText(f"Error: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to load entries: {str(e)}")
-=======
             print(f"Exception in load_entries: {str(e)}")
             if hasattr(self, 'status_label') and self.status_label:
                 self.status_label.setText(f"Error: {str(e)}")
                 self.status_label.setVisible(True)
->>>>>>> Stashed changes
     
     async def process_entries(self, entries: list[PasswordEntry]):
         """Process entries after loading from server"""

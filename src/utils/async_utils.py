@@ -18,40 +18,15 @@ class AsyncRunner(QObject):
     def run(self, coro):
         """Run coroutine and emit result or error"""
         try:
-<<<<<<< Updated upstream
-            # Create or get event loop safely
-            loop = None
-=======
             # Check if we're in an event loop already
->>>>>>> Stashed changes
             try:
                 # Check if we can get the existing event loop
                 loop = asyncio.get_event_loop()
-<<<<<<< Updated upstream
-                
-                # Check if the loop is already running
-                if loop.is_running():
-                    # Create a new loop for this task
-                    loop = asyncio.new_event_loop()
-                    print("Created new event loop (existing loop was running)")
-=======
                 is_running = loop.is_running()
->>>>>>> Stashed changes
             except RuntimeError:
                 # No event loop in this thread
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-<<<<<<< Updated upstream
-                print("Created new event loop (no existing loop)")
-            
-            # Store loop for potential cleanup
-            self.loop = loop
-            
-            # Run the coroutine in the event loop
-            result = loop.run_until_complete(coro)
-            self.finished.emit(result)
-            
-=======
                 is_running = False
             
             # If the loop is already running, we need a new approach
@@ -83,23 +58,12 @@ class AsyncRunner(QObject):
                 result = loop.run_until_complete(coro)
                 self.finished.emit(result)
                 
->>>>>>> Stashed changes
         except Exception as e:
             print(f"Error in AsyncRunner.run: {e}")
             try:
                 self.error.emit(e)
             except RuntimeError as emit_error:
                 print(f"Error emitting error signal: {emit_error}")
-<<<<<<< Updated upstream
-        finally:
-            # Clean up loop if we created a new one
-            if self.loop and self.loop != asyncio.get_event_loop():
-                try:
-                    self.loop.close()
-                    print("Closed temporary event loop")
-                except Exception as close_error:
-                    print(f"Error closing event loop: {close_error}")
-=======
     
     def _run_in_new_loop(self, coro):
         """Run a coroutine in a new event loop in the current thread"""
@@ -111,7 +75,6 @@ class AsyncRunner(QObject):
             return loop.run_until_complete(coro)
         finally:
             loop.close()
->>>>>>> Stashed changes
 
 def async_callback(func: Callable) -> Callable:
     """
