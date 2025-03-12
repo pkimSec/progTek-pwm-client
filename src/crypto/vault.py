@@ -48,6 +48,15 @@ class Vault:
             
         try:
             print(f"Attempting to unlock vault with salt: {salt[:10]}...")
+            # First ensure we're in a clean state
+            try:
+                self._crypto.clear()
+                self._entries_cache.clear()
+                self._unlocked = False
+                print("Cleared previous vault state")
+            except Exception as clear_err:
+                print(f"Non-critical error while clearing vault: {clear_err}")
+                
             # Derive encryption key
             self._crypto.derive_key(master_password, salt)
             self._unlocked = True

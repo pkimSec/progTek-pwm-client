@@ -1,13 +1,15 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFormLayout, QComboBox, QSpinBox,
-    QLineEdit, QGroupBox, QCheckBox, QTabWidget
+    QLineEdit, QGroupBox, QCheckBox, QTabWidget,
+    QMessageBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 from api.client import APIClient
 from utils.config import AppConfig
 from utils.async_utils import async_callback
+from gui.dialogs.password_change import PasswordChangeDialog
 
 class SettingsView(QWidget):
     """View for application settings"""
@@ -55,10 +57,12 @@ class SettingsView(QWidget):
         
         self.auto_lock = QCheckBox("Lock vault on system idle")
         self.auto_lock.setChecked(True)
+        self.auto_lock.stateChanged.connect(self.on_auto_lock_changed)
         security_layout.addRow("", self.auto_lock)
         
         self.clipboard_clear = QCheckBox("Clear clipboard after")
         self.clipboard_clear.setChecked(True)
+        self.clipboard_clear.stateChanged.connect(self.on_clipboard_clear_changed)
         
         clipboard_layout = QHBoxLayout()
         clipboard_layout.addWidget(self.clipboard_clear)
@@ -67,10 +71,16 @@ class SettingsView(QWidget):
         self.clipboard_timeout.setRange(10, 300)
         self.clipboard_timeout.setValue(30)
         self.clipboard_timeout.setSuffix(" seconds")
+        self.clipboard_timeout.valueChanged.connect(self.on_clipboard_timeout_changed)
         clipboard_layout.addWidget(self.clipboard_timeout)
         clipboard_layout.addStretch()
         
         security_layout.addRow("", clipboard_layout)
+        
+        # Password Change Button
+        password_btn = QPushButton("Change Master Password")
+        password_btn.clicked.connect(self.show_password_change_dialog)
+        security_layout.addRow("", password_btn)
         
         general_layout.addWidget(security_group)
         
@@ -106,7 +116,7 @@ class SettingsView(QWidget):
         about_layout = QVBoxLayout(about_tab)
         
         about_label = QLabel(
-            "<h2>Password Manager</h2>"
+            "<h2>progTek-pwm-Client</h2>"
             "<p>Version 0.1.0</p>"
             "<p>Open source password manager with end-to-end encryption.</p>"
             "<p>License: GNU General Public License v3.0</p>"
@@ -134,10 +144,52 @@ class SettingsView(QWidget):
     def on_timeout_changed(self, value):
         """Handle session timeout change"""
         self.config.session_timeout = value
+        
+        # Update main window timeout if available
+        main_window = self.window()
+        if hasattr(main_window, 'inactivity_timer'):
+            print(f"Updating main window inactivity timer to {value} minutes")
+            # Convert minutes to milliseconds
+            main_window.inactivity_timer.setInterval(value * 60 * 1000)
     
     def on_api_timeout_changed(self, value):
         """Handle API timeout change"""
         self.config.api_timeout = value
+        
+        # Update API client timeout if possible
+        if self.api_client and hasattr(self.api_client, 'session') and self.api_client.session:
+            try:
+                self.api_client.session.timeout = value
+                print(f"Updated API client timeout to {value} seconds")
+            except Exception as e:
+                print(f"Could not update API client timeout: {e}")
+    
+    def on_auto_lock_changed(self, state):
+        """Handle auto lock change"""
+        is_checked = (state == Qt.CheckState.Checked)
+        
+        # Update main window auto lock if available
+        main_window = self.window()
+        if hasattr(main_window, 'inactivity_timer'):
+            if is_checked:
+                main_window.inactivity_timer.start()
+                print("Auto lock enabled")
+            else:
+                main_window.inactivity_timer.stop()
+                print("Auto lock disabled")
+    
+    def on_clipboard_clear_changed(self, state):
+        """Handle clipboard clear change"""
+        is_checked = (state == Qt.CheckState.Checked)
+        self.clipboard_timeout.setEnabled(is_checked)
+        
+        # Store in config
+        self.config.clipboard_clear_enabled = is_checked
+    
+    def on_clipboard_timeout_changed(self, value):
+        """Handle clipboard timeout change"""
+        # Store in config
+        self.config.clipboard_clear_timeout = value
     
     def save_settings(self):
         """Save settings to configuration"""
@@ -156,7 +208,7 @@ class SettingsView(QWidget):
         """Test connection to server"""
         try:
             # Test connection by getting salt (requires authentication)
-            await self.api_client.get_vault_salt()
+            result = await self.api_client.get_vault_salt()
             
             # Show success message
             QMessageBox.information(
@@ -164,6 +216,8 @@ class SettingsView(QWidget):
                 "Server connection successful!",
                 QMessageBox.StandardButton.Ok
             )
+            
+            return result
         except Exception as e:
             # Show error message
             QMessageBox.critical(
@@ -171,7 +225,40 @@ class SettingsView(QWidget):
                 f"Connection failed: {str(e)}",
                 QMessageBox.StandardButton.Ok
             )
-
-# Fix QMessageBox and QTimer imports
-from PyQt6.QtWidgets import QMessageBox
-from PyQt6.QtCore import QTimer
+            return None
+    
+    def show_password_change_dialog(self):
+        """Show password change dialog"""
+        dialog = PasswordChangeDialog(self.api_client, self)
+        dialog.password_changed.connect(self.on_password_changed)
+        dialog.exec()
+    
+    def on_password_changed(self):
+        """Handle password change success"""
+        # Notify the user through a message box
+        QMessageBox.information(
+            self,
+            "Password Changed",
+            "Your master password has been successfully changed. "
+            "Make sure you remember your new password, as it cannot be recovered.",
+            QMessageBox.StandardButton.Ok
+        )
+        
+        # Update master password in main window
+        main_window = self.window()
+        if hasattr(main_window, 'user_session') and hasattr(main_window.user_session, 'clear_sensitive_data'):
+            # Clear the old password from memory
+            main_window.user_session.clear_sensitive_data()
+            
+            # Need to re-login or lock vault to set new password
+            reply = QMessageBox.question(
+                self,
+                "Vault Access",
+                "To apply the new password, your vault needs to be locked and unlocked again. "
+                "Would you like to do this now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes and hasattr(main_window, 'lock_vault'):
+                main_window.lock_vault()

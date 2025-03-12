@@ -487,6 +487,72 @@ class APIClient:
         data = {'role': role}
         return await self._request('PATCH', self.endpoints.user(user_id), data)
 
+    async def change_password(self, current_password: str, new_password: str) -> Dict[str, Any]:
+        """
+        Change user's password
+        
+        Args:
+            current_password (str): Current password
+            new_password (str): New password
+            
+        Returns:
+            Dict[str, Any]: Response containing new vault salt
+        """
+        print(f"Changing password for user")
+        
+        data = {
+            'current_password': current_password,
+            'new_password': new_password
+        }
+        
+        try:
+            response = await self._request('PUT', self.endpoints.change_password, data)
+            
+            # Update master password after successful change
+            if 'new_salt' in response:
+                print(f"Password changed successfully, updating local data with new salt")
+                self._master_password = new_password
+                
+                # Try to unlock vault with new credentials
+                from crypto.vault import get_vault
+                vault = get_vault()
+                # First lock the vault to ensure clean state
+                try:
+                    vault.lock()
+                    print("Locked vault before re-initializing with new credentials")
+                except Exception as e:
+                    print(f"Non-critical error while locking vault: {e}")
+                    
+                # Now unlock with new credentials
+                if vault.unlock(new_password, response['new_salt']):
+                    print("Vault unlocked with new password")
+                else:
+                    print("WARNING: Failed to unlock vault with new password")
+                
+                # Update user_session if exists
+                if hasattr(self, 'user_session') and self.user_session:
+                    self.user_session.master_password = new_password
+                    self.user_session.set_vault_salt(response['new_salt'])
+                    print("Updated user session with new credentials")
+            
+            return response
+            
+        except Exception as e:
+            print(f"Error changing password: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Create a descriptive error message
+            if hasattr(e, 'message'):
+                error_message = e.message
+            else:
+                error_message = str(e)
+                
+            if "401" in error_message:
+                raise Exception("Current password is incorrect") from e
+            else:
+                raise Exception(f"Failed to change password: {error_message}") from e
+
     async def delete_user(self, user_id: int) -> Dict[str, str]:
         """Delete a user (admin only)"""
         return await self._request('DELETE', self.endpoints.user(user_id))
