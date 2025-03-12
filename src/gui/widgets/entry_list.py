@@ -500,14 +500,32 @@ class EntryList(QWidget):
     
     def set_category(self, category_name: str, category_id: Optional[int]):
         """Set the current category filter"""
+        print(f"Setting category filter: {category_name} (ID: {category_id})")
+        
+        # Store previous values to detect changes
+        old_category_id = self.current_category_id
+        old_category_name = self.current_category_name
+        
+        # Update current values
         self.current_category_id = category_id
         self.current_category_name = category_name
         
         # Update category label
         self.category_label.setText(category_name)
         
-        # Apply filters
-        self.apply_filters()
+        # Special case for "All Items"
+        if category_name == "All Items":
+            print("ALL ITEMS selected - showing entries from all categories")
+            # Simply make all entries visible
+            for entry_id, (item, entry, _) in self.entries.items():
+                item.setHidden(False)
+            
+            # Update count and sort
+            self.update_count()
+            self.apply_sort()
+        else:
+            # Apply filters for other categories
+            self.apply_filters()
     
     def filter_entries(self, filter_text: str = None):
         """Filter entries by search text"""
@@ -520,7 +538,10 @@ class EntryList(QWidget):
         """Apply current filters and sort to the entries"""
         visible_count = 0
         
-        print(f"Applying filters - Category ID: {self.current_category_id}, Filter: '{self.current_filter}'")
+        # Special case for "All Items" - show everything
+        is_all_items_view = (self.current_category_name == "All Items")
+        
+        print(f"Applying filters - Category: '{self.current_category_name}', All Items view: {is_all_items_view}")
         
         # Loop through all entries
         for entry_id, (item, entry, decrypted_data) in self.entries.items():
@@ -533,8 +554,8 @@ class EntryList(QWidget):
             # Start with item visible
             visible = True
             
-            # Apply category filter (only if not "All Items" and not None)
-            if self.current_category_id is not None and decrypted_data:
+            # Skip category filtering for "All Items" view
+            if not is_all_items_view and self.current_category_id is not None and decrypted_data:
                 # Check if entry belongs to category
                 entry_category_id = decrypted_data.get('category_id')
                 if entry_category_id != self.current_category_id:
@@ -661,30 +682,65 @@ class EntryList(QWidget):
     
     def apply_sort(self):
         """Apply current sort settings to the list"""
-        self.list.sortItems(self.current_sort_order)
-        
-        # Custom sorting for non-title fields
-        if self.current_sort_field != "title":
-            # Copy all visible items
-            items = []
+        try:
+            # First, apply basic sorting by text
+            self.list.sortItems(self.current_sort_order)
+            
+            # Skip custom sorting for title since the basic sort already handles it
+            if self.current_sort_field == "title":
+                return
+                
+            # Custom sorting for non-title fields - make a safe copy
+            visible_items = []
             for i in range(self.list.count()):
                 item = self.list.item(i)
-                if not item.isHidden():
-                    items.append(item)
+                if item and not item.isHidden():
+                    visible_items.append(item)
+            
+            if not visible_items:
+                return  # No items to sort
             
             # Sort items based on selected field
             if self.current_sort_field == "username":
-                items.sort(key=lambda x: getattr(x, 'username', '').lower(), 
-                           reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder))
+                # Safe sort - check if attribute exists before using it
+                def get_username(x):
+                    if hasattr(x, 'username') and x.username:
+                        return x.username.lower()
+                    return x.text().lower()
+                    
+                visible_items.sort(
+                    key=get_username, 
+                    reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder)
+                )
             elif self.current_sort_field == "updated_at":
-                # Custom sorting for updated_at (newest first for descending)
-                items.sort(key=lambda x: x.entry_data.updated_at if hasattr(x, 'entry_data') else datetime.min,
-                           reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder))
+                # Safe sort with fallback for entries without updated_at
+                def get_update_time(x):
+                    if hasattr(x, 'entry_data') and hasattr(x.entry_data, 'updated_at'):
+                        return x.entry_data.updated_at
+                    elif hasattr(x, 'updated_at'):
+                        return x.updated_at
+                    else:
+                        from datetime import datetime
+                        return datetime.min
+                        
+                visible_items.sort(
+                    key=get_update_time,
+                    reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder)
+                )
             
-            # Reorder items in the list
-            self.list.clear()
-            for item in items:
-                self.list.addItem(item)
+            # Only modify list if we have items to sort
+            if visible_items:
+                # Take all items from the list without deleting them
+                for i in range(self.list.count()-1, -1, -1):
+                    self.list.takeItem(i)
+                
+                # Re-add in sorted order
+                for item in visible_items:
+                    self.list.addItem(item)
+        except Exception as e:
+            print(f"Error during sorting: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def update_count(self):
         """Update the entry count label"""
