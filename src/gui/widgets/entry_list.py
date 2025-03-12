@@ -156,6 +156,27 @@ class EntryList(QWidget):
         self.status_label.setStyleSheet("color: gray; font-style: italic;")
         layout.addWidget(self.status_label)
     
+    def load_entries_sync(self):
+        """Synchronous wrapper for load_entries that doesn't require await"""
+        # Get a fresh reference to the API client if needed
+        if not self.api_client and hasattr(self, 'parent') and self.parent():
+            parent = self.parent()
+            if hasattr(parent, 'api_client') and parent.api_client:
+                self.api_client = parent.api_client
+                
+            # Also ensure user_session is attached
+            if hasattr(parent, 'user_session') and parent.user_session:
+                if not hasattr(self.api_client, 'user_session'):
+                    self.api_client.user_session = parent.user_session
+                    
+        # Call the async method directly - @async_callback will handle the execution
+        try:
+            self.load_entries()
+        except Exception as e:
+            print(f"Error in load_entries_sync: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     @async_callback
     async def load_entries(self):
         """Load all password entries from server"""
@@ -164,8 +185,37 @@ class EntryList(QWidget):
             self.status_label.setVisible(True)
             self.list.setVisible(False)
             
+            # Ensure we have an API client
+            if not self.api_client and hasattr(self, 'parent'):
+                parent = self.parent()
+                while parent and not hasattr(parent, 'api_client'):
+                    parent = parent.parent()
+                    
+                if parent and hasattr(parent, 'api_client'):
+                    self.api_client = parent.api_client
+                    print(f"Got api_client from parent: {self.api_client}")
+                    
+                    # Get user_session too if available
+                    if hasattr(parent, 'user_session') and not hasattr(self.api_client, 'user_session'):
+                        self.api_client.user_session = parent.user_session
+                        print(f"Associated user_session with api_client in load_entries")
+            
+            if not self.api_client:
+                print("No API client available, cannot load entries")
+                self.status_label.setText("Error: No API client available")
+                return
+                
+            print(f"Loading entries using API client at {self.api_client.endpoints.base_url}")
+            
+            # Make sure session token is present in headers
+            if hasattr(self.api_client, '_session_token') and self.api_client._session_token:
+                print(f"Using session token: {self.api_client._session_token}")
+            else:
+                print("Warning: No session token available")
+                
             # Get entries from server
             entries = await self.api_client.list_entries()
+            print(f"Retrieved {len(entries)} entries from server")
             
             # Process entries
             await self.process_entries(entries)
@@ -174,7 +224,7 @@ class EntryList(QWidget):
             import traceback
             traceback.print_exc()
             self.status_label.setText(f"Error: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to load entries: {str(e)}")
+            print(f"Error loading entries: {str(e)}")
     
     async def process_entries(self, entries: list[PasswordEntry]):
         """Process entries after loading from server"""
@@ -186,40 +236,81 @@ class EntryList(QWidget):
             # Get vault instance
             vault = get_vault()
             if not vault.is_unlocked():
-                self.status_label.setText("Vault is locked. Cannot display entries.")
-                return
-            
+                print("Vault locked, attempting to unlock...")
+                # Try to find master password and salt
+                master_password = None
+                vault_salt = None
+                
+                # Get from API client if available
+                if hasattr(self, 'api_client') and self.api_client:
+                    master_password = self.api_client._master_password
+                    if hasattr(self.api_client, 'user_session') and self.api_client.user_session:
+                        vault_salt = self.api_client.user_session.vault_salt
+                        print(f"Got vault_salt from api_client.user_session: {bool(vault_salt)}")
+                
+                # Try unlocking if we have both
+                if master_password and vault_salt:
+                    print(f"Attempting to unlock vault with retrieved credentials")
+                    if vault.unlock(master_password, vault_salt):
+                        print("Successfully unlocked vault during process_entries")
+                    else:
+                        print("Failed to unlock vault during process_entries")
+                        self.status_label.setText("Vault is locked. Cannot display entries.")
+                        return
+                else:
+                    print(f"Missing vault unlock params - master_password: {bool(master_password)}, vault_salt: {bool(vault_salt)}")
+                    self.status_label.setText("Vault is locked. Cannot display entries.")
+                    return
+                    
             # Process each entry
+            successful_entries = 0
             for entry in entries:
-                # Try to decrypt the entry
                 try:
+                    print(f"Processing entry {entry.id}, encrypted_data length: {len(entry.encrypted_data)}")
                     decrypted_data = vault.decrypt_entry(entry.encrypted_data)
+                    print(f"Successfully decrypted entry {entry.id}: {decrypted_data.get('title', 'Unknown')}")
                     
                     # Create list item with decrypted data
                     item = EntryListItem(entry, decrypted_data)
                     self.list.addItem(item)
                     self.entries[entry.id] = (item, entry, decrypted_data)
+                    successful_entries += 1
                     
                 except Exception as e:
                     print(f"Error decrypting entry {entry.id}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     # Add with minimal data
                     item = EntryListItem(entry)
                     self.list.addItem(item)
                     self.entries[entry.id] = (item, entry, None)
             
-            # Apply filters
-            self.apply_filters()
+            print(f"Processed {successful_entries} entries successfully out of {len(entries)}")
             
-            # Update status
-            if len(entries) == 0:
+            # Make sure the list is visible if we have entries
+            if len(entries) > 0:
+                print(f"Making list visible with {len(entries)} entries")
+                self.list.setVisible(True)
+                self.empty_label.setVisible(False)
+                self.status_label.setVisible(False)
+                
+                # Force a layout update
+                self.list.update()
+                
+                # Show count
+                if hasattr(self, 'count_label'):
+                    self.count_label.setText(f"{len(entries)} entries")
+                    self.count_label.setVisible(True)
+            else:
                 self.status_label.setText("No entries found")
                 self.status_label.setVisible(True)
                 self.list.setVisible(False)
-            else:
-                self.status_label.setVisible(False)
-                self.list.setVisible(True)
+            
+            # Apply filters (with fix to ensure items stay visible)
+            self.apply_filters(force_visibility=True)
             
         except Exception as e:
+            print(f"Error processing entries: {str(e)}")
             import traceback
             traceback.print_exc()
             self.status_label.setText(f"Error processing entries: {str(e)}")
@@ -375,6 +466,37 @@ class EntryList(QWidget):
         
         # Apply filters and sort
         self.apply_filters()
+
+    def remove_entry(self, entry_id: int):
+        """Remove an entry from the list"""
+        print(f"Removing entry {entry_id} from list")
+        if entry_id in self.entries:
+            # Get the item
+            item, _, _ = self.entries[entry_id]
+            
+            # Remove from list widget
+            row = self.list.row(item)
+            if row >= 0:  # Make sure the item exists in the list
+                self.list.takeItem(row)
+                print(f"Removed entry {entry_id} from list widget at row {row}")
+            
+            # Remove from dictionary
+            del self.entries[entry_id]
+            print(f"Removed entry {entry_id} from entries dictionary")
+            
+            # Update count and visibility
+            self.update_count()
+            
+            # Refresh display if needed
+            if self.list.count() > 0:
+                self.list.setVisible(True)
+                self.empty_label.setVisible(False)
+            else:
+                self.list.setVisible(False)
+                self.empty_label.setText("No entries found")
+                self.empty_label.setVisible(True)
+        else:
+            print(f"Entry {entry_id} not found in entries dictionary")
     
     def set_category(self, category_name: str, category_id: Optional[int]):
         """Set the current category filter"""
@@ -394,16 +516,24 @@ class EntryList(QWidget):
         
         self.apply_filters()
     
-    def apply_filters(self):
+    def apply_filters(self, force_visibility=False):
         """Apply current filters and sort to the entries"""
         visible_count = 0
         
+        print(f"Applying filters - Category ID: {self.current_category_id}, Filter: '{self.current_filter}'")
+        
         # Loop through all entries
         for entry_id, (item, entry, decrypted_data) in self.entries.items():
+            if force_visibility:
+                # Override filter logic and make all items visible
+                item.setHidden(False)
+                visible_count += 1
+                continue
+                
             # Start with item visible
             visible = True
             
-            # Apply category filter (except "all")
+            # Apply category filter (only if not "All Items" and not None)
             if self.current_category_id is not None and decrypted_data:
                 # Check if entry belongs to category
                 entry_category_id = decrypted_data.get('category_id')
@@ -425,12 +555,12 @@ class EntryList(QWidget):
                     ]
                     
                     for field in fields_to_check:
-                        if field and self.current_filter in field.lower():
+                        if field and self.current_filter.lower() in field.lower():
                             match_found = True
                             break
                 else:
                     # Fall back to item's displayed text
-                    if self.current_filter in item.text().lower():
+                    if self.current_filter.lower() in item.text().lower():
                         match_found = True
                 
                 if not match_found:
@@ -442,24 +572,70 @@ class EntryList(QWidget):
             if visible:
                 visible_count += 1
         
-        # Show/hide empty state
-        if visible_count == 0 and self.list.count() > 0:
-            self.empty_label.setText("No matching entries found")
-            self.empty_label.show()
-            self.list.hide()
-        elif self.list.count() == 0:
-            self.empty_label.setText("No entries found")
-            self.empty_label.show()
-            self.list.hide()
+        print(f"Filter applied: {visible_count} of {len(self.entries)} entries visible")
+        
+        # Show/hide empty state based on actual item count, not filter results
+        if self.list.count() > 0:
+            # We have items, just maybe none visible after filtering
+            if visible_count == 0:
+                self.empty_label.setText("No matching entries found")
+                self.empty_label.setVisible(True)
+                self.list.setVisible(False)
+            else:
+                self.empty_label.setVisible(False)
+                self.list.setVisible(True)
         else:
-            self.empty_label.hide()
-            self.list.show()
+            # No items at all
+            self.empty_label.setText("No entries found")
+            self.empty_label.setVisible(True)
+            self.list.setVisible(False)
         
         # Apply sort
         self.apply_sort()
         
         # Update count
         self.update_count()
+
+    def reload_all_entries(self, force_display=True):
+        """Completely reload all entries from scratch"""
+        print("Performing complete entry reload")
+        
+        try:
+            # Clear everything
+            self.list.clear()
+            self.entries = {}
+            
+            # Show loading
+            self.status_label.setText("Loading entries...")
+            self.status_label.setVisible(True)
+            
+            # Get a fresh API client if needed
+            if not self.api_client and hasattr(self, 'parent'):
+                parent = self.parent()
+                if hasattr(parent, 'api_client'):
+                    self.api_client = parent.api_client
+                    
+            if not self.api_client:
+                self.status_label.setText("No API client available")
+                return
+                    
+            # Load the entries through the load_entries_sync method
+            self.load_entries_sync()
+            
+            # Force display if requested
+            if force_display:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(300, self.force_display_refresh)
+        
+        except Exception as e:
+            print(f"Error in reload_all_entries: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.status_label.setText(f"Error: {str(e)}")
+            
+        # Make sure count is updated
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, self.update_count)
     
     def on_sort_changed(self, sort_field: str):
         """Handle sort field change"""
@@ -526,5 +702,43 @@ class EntryList(QWidget):
         else:
             self.count_label.setText(f"{total_count} entries")
         
-        # Update visibility
-        self.count_label.setVisible(total_count > 0)
+        # Ensure the list and count label are visible if we have entries
+        if total_count > 0:
+            print(f"Making list visible with {total_count} entries")
+            self.count_label.setVisible(True)
+            self.list.setVisible(True)
+            self.empty_label.setVisible(False)
+            self.status_label.setVisible(False)
+        else:
+            print("No entries to display")
+            self.empty_label.setVisible(True)
+            self.list.setVisible(False)
+
+    def force_display_refresh(self):
+        """Force a refresh of the display"""
+        print("Forcing display refresh...")
+        
+        try:
+            # Make sure the list is visible
+            self.list.setVisible(True)
+            self.empty_label.setVisible(False)
+            self.status_label.setVisible(False)
+            
+            # Make sure all items are visible (unless filtered)
+            visible_count = 0
+            for i in range(self.list.count()):
+                item = self.list.item(i)
+                item.setHidden(False)  # Start with all visible
+                visible_count += 1
+            
+            print(f"Made {visible_count} entries visible")
+            
+            # Refresh count
+            self.update_count()
+            
+            # Force a repaint
+            self.list.repaint()
+        except Exception as e:
+            print(f"Error during force display refresh: {str(e)}")
+            import traceback
+            traceback.print_exc()

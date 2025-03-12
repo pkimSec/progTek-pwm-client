@@ -13,7 +13,7 @@ from utils.async_utils import async_callback
 from crypto.vault import get_vault
 
 from gui.widgets.category_tree import CategoryTree
-from gui.widgets.entry_list import EntryList
+from gui.widgets.entry_list import EntryList, EntryListItem 
 from gui.widgets.entry_form import EntryForm
 
 class VaultView(QWidget):
@@ -178,14 +178,22 @@ class VaultView(QWidget):
             # Use safe status update method
             self.safe_update_status("Loading vault data...")
             
+            # First, make sure our API client has the user_session
+            if hasattr(self, 'api_client') and hasattr(self, 'parent') and self.parent():
+                parent = self.parent()
+                if hasattr(parent, 'user_session') and parent.user_session:
+                    self.api_client.user_session = parent.user_session
+                    print(f"Associated user_session with api_client in load_data")
+            
             # Check if entry_list is still valid
             if hasattr(self, 'entry_list') and self.entry_list:
                 try:
-                    # Load entries
-                    await self.entry_list.load_entries()
+                    # Use synchronous wrapper instead of awaiting
+                    self.entry_list.load_entries_sync()
                     
-                    # Update entry count
-                    self.update_entry_count()
+                    # Update entry count after a delay to give entries time to load
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(1000, self.update_entry_count)
                 except Exception as entry_error:
                     print(f"Error loading entries: {str(entry_error)}")
                     import traceback
@@ -201,10 +209,6 @@ class VaultView(QWidget):
             import traceback
             traceback.print_exc()
             self.safe_update_status(f"Error: {str(e)}")
-            try:
-                QMessageBox.critical(self, "Error", f"Failed to load vault data: {str(e)}")
-            except RuntimeError:
-                print("Cannot show error message - widget may have been deleted")
 
     def safe_update_status(self, message):
         """Update status label safely, handling potential widget deletion"""
@@ -257,11 +261,19 @@ class VaultView(QWidget):
         """Handle entry saved event"""
         # Refresh the entry in the list
         self.refresh_entry(entry_id)
+        
+        # Also force a full display refresh after a delay
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, lambda: self.entry_list.force_display_refresh() if hasattr(self.entry_list, 'force_display_refresh') else None)
     
     @async_callback
     async def refresh_entry(self, entry_id: int):
         """Refresh a specific entry"""
         try:
+            # Ensure api_client has user_session attached
+            if hasattr(self, 'user_session') and not hasattr(self.api_client, 'user_session'):
+                self.api_client.user_session = self.user_session
+
             # Get entry from API
             entry = await self.api_client.get_entry(entry_id)
             
@@ -294,7 +306,11 @@ class VaultView(QWidget):
             del self.entry_list.entries[entry_id]
             
             # Update count
-            self.update_entry_count()
+            self.entry_list.update_count()
+            
+            # Force refresh display
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, lambda: self.entry_list.force_display_refresh() if hasattr(self.entry_list, 'force_display_refresh') else None)
             
             # Clear form
             self.entry_form.clear()
@@ -306,15 +322,22 @@ class VaultView(QWidget):
         
         # Make sure vault is unlocked
         if not vault.is_unlocked():
-            # Try to unlock it with user session data
-            if hasattr(self, 'api_client') and hasattr(self.api_client, 'user_session'):
+            # Try to unlock with user session data
+            if hasattr(self, 'api_client'):
                 # Get vault unlock params from user session
                 master_password = self.api_client._master_password
                 vault_salt = None
                 
-                # Try to get salt from API or user session
-                if hasattr(self.user_session, 'vault_salt'):
-                    vault_salt = self.user_session.vault_salt
+                # Try to get user_session either from api_client or parent
+                if hasattr(self.api_client, 'user_session') and self.api_client.user_session:
+                    vault_salt = self.api_client.user_session.vault_salt
+                elif hasattr(self, 'parent') and self.parent():
+                    if hasattr(self.parent(), 'user_session') and self.parent().user_session:
+                        vault_salt = self.parent().user_session.vault_salt
+                        # Also associate user_session with api_client if needed
+                        if not hasattr(self.api_client, 'user_session'):
+                            self.api_client.user_session = self.parent().user_session
+                            print("Associated api_client with user_session in add_entry")
                 
                 if master_password and vault_salt:
                     print(f"Attempting to unlock vault before adding entry...")
@@ -330,11 +353,14 @@ class VaultView(QWidget):
                     self.show_vault_locked_message()
                     return
             else:
+                print("No API client available, cannot add entry")
                 self.show_vault_locked_message()
                 return
         
         # Clear the form and set mode to add
         self.entry_form.clear()
+        self.entry_form.set_mode("add")
+        print("Set entry form mode to 'add'")
         
         # Set the current selected category
         if hasattr(self.entry_list, 'current_category_id') and self.entry_list.current_category_id:
@@ -343,6 +369,42 @@ class VaultView(QWidget):
                 'name': self.entry_list.current_category_name
             }
             self.entry_form.set_category(category_data)
+
+    @async_callback
+    async def delete_entry(self, item: EntryListItem):
+        """Delete an entry"""
+        if not hasattr(item, 'entry_id'):
+            return
+                
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self, "Delete Entry",
+            "Are you sure you want to delete this entry?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+                
+        try:
+            # Call API to delete entry
+            await self.api_client.delete_entry(item.entry_id)
+            
+            # Remove from local data and UI
+            self.entry_list.remove_entry(item.entry_id)
+            
+            # Update count
+            self.entry_list.update_count()
+            
+            # Check if list is now empty
+            if self.entry_list.list.count() == 0:
+                self.entry_list.empty_label.setText("No entries found")
+                self.entry_list.empty_label.show()
+                self.entry_list.list.hide()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to delete entry: {str(e)}")
 
     def show_vault_locked_message(self):
         """Show message about vault being locked with options to unlock"""
@@ -427,20 +489,43 @@ class VaultView(QWidget):
         """Handle global search"""
         self.entry_list.filter_entries(search_text)
     
-    @async_callback
-    async def refresh_data(self):
-        """Refresh all data"""
+    def refresh_data(self):
+        """Refresh all data - synchronous wrapper"""
+        print("Refresh button clicked - performing full refresh")
+        
         try:
             self.status_label.setText("Refreshing vault data...")
             
-            # Load entries
-            await self.entry_list.load_entries()
-            
-            # Update entry count
-            self.update_entry_count()
-            
+            # First make sure API client and user_session are properly linked
+            if hasattr(self, 'api_client') and hasattr(self, 'parent') and self.parent():
+                if hasattr(self.parent(), 'user_session') and not hasattr(self.api_client, 'user_session'):
+                    self.api_client.user_session = self.parent().user_session
+                    print("Linked user_session to api_client during refresh")
+                    
+            # Ensure the entry_list has the API client
+            if hasattr(self, 'entry_list'):
+                self.entry_list.api_client = self.api_client
+                
+                # Completely reload entries
+                if hasattr(self.entry_list, 'reload_all_entries'):
+                    self.entry_list.reload_all_entries(force_display=True)
+                else:
+                    self.entry_list.load_entries_sync()
+                    
+                # Schedule a display refresh
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(500, lambda: self.entry_list.force_display_refresh() if hasattr(self.entry_list, 'force_display_refresh') else None)
+                    
+            # Also refresh categories
+            print("Refreshing categories...")
+            if hasattr(self, 'category_tree') and hasattr(self.category_tree, 'load_categories'):
+                self.category_tree.load_categories()
+                
             self.status_label.setText("Data refreshed successfully")
             
         except Exception as e:
+            print(f"Error refreshing data: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.status_label.setText(f"Error: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to refresh data: {str(e)}")

@@ -28,6 +28,10 @@ class MainWindow(QMainWindow):
         self.user_session = user_session
         self.config = config
 
+        self.api_client.user_session = user_session
+        # Pass the user_session to the vault_view components
+        QTimer.singleShot(500, self.initialize_vault_properly)
+
         # Verify it is valid data
         if not api_client or not user_session:
             print("WARNING: MainWindow initialized with invalid api_client or user_session")
@@ -100,6 +104,49 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             self.status_bar.showMessage(f"Error initializing vault: {str(e)}", 5000)
+
+    def initialize_vault_properly(self):
+        """Ensure vault is properly initialized after components are created"""
+        print("Running delayed vault initialization...")
+        try:
+            # Ensure the vault view has the necessary components
+            if hasattr(self, 'vault_view'):
+                # Pass the user_session to the entry list
+                if hasattr(self.vault_view, 'entry_list') and self.vault_view.entry_list:
+                    if hasattr(self.vault_view.entry_list, 'api_client'):
+                        self.vault_view.entry_list.api_client = self.api_client
+                        print("Passed api_client to entry_list")
+                    
+                    # Force a reload of entries with longer delay to ensure vault is ready
+                    QTimer.singleShot(1500, self.reload_entries)
+                    
+                    # Add a second delayed refresh to handle any race conditions
+                    QTimer.singleShot(2500, self.force_refresh_entries)
+        except Exception as e:
+            print(f"Error in initialize_vault_properly: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def force_refresh_entries(self):
+        """Force refresh of entries display"""
+        print("Forcing entry display refresh...")
+        try:
+            if hasattr(self, 'vault_view') and hasattr(self.vault_view, 'entry_list'):
+                if hasattr(self.vault_view.entry_list, 'force_display_refresh'):
+                    self.vault_view.entry_list.force_display_refresh()
+                    print("Force display refresh completed")
+        except Exception as e:
+            print(f"Error forcing display refresh: {str(e)}")
+
+    def reload_entries(self):
+        """Force reload of entries"""
+        print("Forcing reload of entries...")
+        try:
+            if hasattr(self, 'vault_view') and hasattr(self.vault_view, 'entry_list'):
+                self.vault_view.entry_list.load_entries_sync()
+                print("Entries reload triggered")
+        except Exception as e:
+            print(f"Error reloading entries: {str(e)}")
     
     def setup_ui(self):
         """Initialize user interface"""

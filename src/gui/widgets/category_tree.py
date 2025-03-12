@@ -188,14 +188,18 @@ class CategoryTree(QWidget):
         """Handle item click - emit category selected signal"""
         category_data = item.data(0, Qt.ItemDataRole.UserRole)
         
-        if category_data == "all":
-            # All items
+        if isinstance(category_data, dict) and category_data.get('name') == "All Items":
+            # All items - use None for category ID to show all entries
+            print("All Items selected - showing entries from all categories")
             self.category_selected.emit("All Items", None)
         elif isinstance(category_data, dict):
             # Regular category
             category_id = category_data.get('id')
             category_name = category_data.get('name', '')
+            print(f"Category selected: {category_name} (ID: {category_id})")
             self.category_selected.emit(category_name, category_id)
+        else:
+            print(f"Unknown category data: {category_data}")
     
     def filter_categories(self, filter_text: str):
         """Filter categories by text"""
