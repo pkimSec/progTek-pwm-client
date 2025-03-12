@@ -309,7 +309,9 @@ class PasswordManagerApp(QObject):
         self.api_client = APIClient(self.config.api_base_url)
         self.api_client._access_token = response.access_token
         self.api_client._session_token = getattr(response, 'session_token', None)
-        self.api_client.set_master_password(master_password)
+        
+        # Store the master password before initializing vault
+        self.api_client._master_password = master_password
         
         # Save the email from the login dialog
         user_email = None
@@ -319,7 +321,7 @@ class PasswordManagerApp(QObject):
             print(f"Using email from login dialog: {user_email}")
         else:
             print("No email from login dialog")
-            
+                
         # Create user session
         config_dir = Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config')
         config_dir = config_dir / 'password_manager'
@@ -333,42 +335,54 @@ class PasswordManagerApp(QObject):
             master_password=master_password,
             email=user_email
         )
+        
+        # Associate user_session with api_client immediately
+        self.api_client.user_session = self.user_session
+        
+        # Save session to disk
         self.user_session.save(config_dir)
         
-        # Immediately try to get the vault salt
-        async def fetch_salt():
-            try:
-                salt = await self.api_client.get_vault_salt()
-                if salt:
-                    print(f"Retrieved initial vault salt: {salt}")
-                    self.user_session.set_vault_salt(salt)
-                    self.user_session.save(config_dir)
-            except Exception as e:
-                print(f"Error fetching initial salt: {str(e)}")
+        # Fetch vault salt before showing main window
+        self.fetch_salt_and_continue(login_dialog_to_close)
+
+    @async_callback
+    async def fetch_salt_and_continue(self, login_dialog_to_close=None):
+        """Fetch vault salt and then show main window"""
+        try:
+            print("Fetching vault salt before showing main window...")
+            salt = await self.api_client.get_vault_salt()
+            
+            if salt:
+                print(f"Successfully retrieved vault salt: {salt[:10]}...")
+                self.user_session.set_vault_salt(salt)
+                self.user_session.save(Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config') / 'password_manager')
                 
-        # Execute this immediately
-        from utils.async_utils import standalone_async_task
-        standalone_async_task(fetch_salt)
-        
-        print("Session saved, preparing to show main window")
-        
-        # Close the login dialog using a direct approach
-        if login_dialog_to_close:
-            try:
-                print("Closing login dialog")
-                # First hide it so it disappears from screen immediately
-                login_dialog_to_close.hide()
-                # Then close it
-                login_dialog_to_close.close()
-                # For good measure, try to delete it
-                login_dialog_to_close.deleteLater()
-                print("Login dialog scheduled for deletion")
-            except Exception as e:
-                print(f"Error closing login dialog: {str(e)}")
-        
-        # Schedule showing the main window
-        QTimer.singleShot(0, self.show_main_window)
-        self.session_timer.start()
+                # Now set the master password to unlock the vault
+                self.api_client.set_master_password(self.api_client._master_password)
+            else:
+                print("Warning: Could not retrieve vault salt")
+        except Exception as e:
+            print(f"Error fetching vault salt: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # Close the login dialog using a direct approach
+            if login_dialog_to_close:
+                try:
+                    print("Closing login dialog")
+                    # First hide it so it disappears from screen immediately
+                    login_dialog_to_close.hide()
+                    # Then close it
+                    login_dialog_to_close.close()
+                    # For good measure, try to delete it
+                    login_dialog_to_close.deleteLater()
+                    print("Login dialog scheduled for deletion")
+                except Exception as e:
+                    print(f"Error closing login dialog: {str(e)}")
+            
+            # Schedule showing the main window
+            QTimer.singleShot(0, self.show_main_window)
+            self.session_timer.start()
     
     def show_main_window(self):
         """Show main application window"""

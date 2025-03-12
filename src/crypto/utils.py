@@ -81,13 +81,13 @@ class VaultCrypto:
         """Check if encryption key has been derived"""
         return self._derived
     
-    def derive_key(self, master_password: str, salt: str) -> None:
+    def derive_key(self, master_password: str, salt: str = None) -> None:
         """
-        Derive encryption key from master password and server-provided salt.
+        Derive encryption key from the master password using PBKDF2.
         
         Args:
             master_password: The user's master password
-            salt: Base64-encoded salt from server
+            salt: Base64-encoded salt string from server
         """
         # Clear previous key if any
         self._encryption_key.clear()
@@ -95,25 +95,32 @@ class VaultCrypto:
         # Store master password reference 
         self._master_password = master_password
         
-        # Decode salt
-        salt_bytes = base64.b64decode(salt)
-        self._salt = salt
-        
-        # Create PBKDF2 key derivation function
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=self.KEY_LENGTH,
-            salt=salt_bytes,
-            iterations=self.ITERATIONS
-        )
-        
-        # Derive key
-        key = kdf.derive(master_password.encode())
-        
-        # Store key securely
-        self._encryption_key.set_data(key)
-        self._derived = True
-        print(f"Key derived successfully using PBKDF2 with {self.ITERATIONS} iterations")
+        try:
+            # Decode salt
+            salt_bytes = base64.b64decode(salt)
+            self._salt = salt
+            
+            # Create PBKDF2 key derivation function
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=self.KEY_LENGTH,
+                salt=salt_bytes,
+                iterations=self.ITERATIONS
+            )
+            
+            # Derive key
+            key = kdf.derive(master_password.encode())
+            
+            # Store key securely
+            self._encryption_key.set_data(key)
+            self._derived = True
+            print(f"Key derived successfully using PBKDF2 with {self.ITERATIONS} iterations")
+        except Exception as e:
+            self._derived = False
+            print(f"Error deriving key: {e}")
+            import traceback
+            traceback.print_exc()
+            raise ValueError(f"Failed to derive encryption key: {str(e)}")
     
     def encrypt(self, data: Dict[str, Any]) -> Dict[str, str]:
         """

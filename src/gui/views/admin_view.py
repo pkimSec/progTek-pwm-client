@@ -822,49 +822,59 @@ class AdminView(QWidget):
             "Invite code deactivated successfully.",
             QMessageBox.StandardButton.Ok
         )
-    
+        
     @async_callback
     async def refresh_users(self):
         """Refresh the user list"""
         try:
             # Show loading indicator if available
-            if hasattr(self, 'show_loading'):
-                self.show_loading(True)
+            if hasattr(self, 'status_label'):
+                self.status_label.setText("Loading users...")
+                self.status_label.setVisible(True)
             
             print("AdminView: Refreshing users list")
             
-            # This message will be displayed in the UI for now
+            # Clear existing data
             self.user_table.table.clearContents()
             self.user_table.table.setRowCount(0)
             
-            # Display a message that this feature is waiting for API implementation
-            QMessageBox.information(
-                self, "Feature Not Available", 
-                "User management features are waiting for server API implementation.\n\n"
-                "The server-side endpoints for user listing and management need to be "
-                "added to your server before these features will work.",
-                QMessageBox.StandardButton.Ok
-            )
-            
-        except APIError as e:
-            print(f"AdminView: API Error refreshing users: {e.status_code} - {e.message}")
-            # Show error with specific message
-            if e.status_code == 403:
-                QMessageBox.critical(
-                    self, "Permission Denied", 
-                    "You don't have permission to view users.",
-                    QMessageBox.StandardButton.Ok
-                )
-            else:
-                QMessageBox.critical(
-                    self, "Error", 
-                    f"Failed to load users: {e.message}",
-                    QMessageBox.StandardButton.Ok
-                )
+            # Fetch users from API
+            try:
+                users = await self.api_client.list_users()
+                print(f"Fetched {len(users)} users from server")
+                
+                # Display users in table
+                self.user_table.set_users(users)
+                
+                # Update status
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText(f"Loaded {len(users)} users")
+                    self.status_label.setVisible(False)
+                
+            except APIError as e:
+                print(f"API Error: {e.status_code} - {e.message}")
+                # Show specific error message
+                if e.status_code == 403:
+                    QMessageBox.critical(
+                        self, "Permission Denied", 
+                        "You don't have permission to view users.",
+                        QMessageBox.StandardButton.Ok
+                    )
+                else:
+                    QMessageBox.critical(
+                        self, "Error", 
+                        f"Failed to load users: {e.message}",
+                        QMessageBox.StandardButton.Ok
+                    )
+                
         except Exception as e:
+            print(f"AdminView: Error refreshing users: {str(e)}")
             import traceback
-            print(f"AdminView: Exception refreshing users: {str(e)}")
             traceback.print_exc()
+            
+            if hasattr(self, 'status_label'):
+                self.status_label.setText(f"Error: {str(e)}")
+                
             # Show general error
             QMessageBox.critical(
                 self, "Error", 
@@ -917,10 +927,9 @@ class AdminView(QWidget):
                     self.show_loading(True)
                 
                 # Call API to update user status
-                # Note: This endpoint is not implemented in the current server API
-                # await self.api_client.update_user_status(user_id, not user_data['is_active'])
+                await self.api_client.update_user_status(user_id, not user_data['is_active'])
                 
-                # For now, update the mock data
+                # Update local data after successful API call
                 user_data['is_active'] = not user_data['is_active']
                 
                 # Update UI
@@ -992,10 +1001,9 @@ class AdminView(QWidget):
                     self.show_loading(True)
                 
                 # Call API to update user role
-                # Note: This endpoint is not implemented in the current server API
-                # await self.api_client.update_user_role(user_id, new_role)
+                await self.api_client.update_user_role(user_id, new_role)
                 
-                # For now, update the mock data
+                # Update local data after successful API call
                 user_data['role'] = new_role
                 
                 # Update UI
