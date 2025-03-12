@@ -196,6 +196,7 @@ class EntryForm(QWidget):
     
     def set_mode(self, mode: str):
         """Set the form mode (view, add, edit)"""
+        print(f"Setting form mode to: {mode}")
         self.current_mode = mode
         
         # Set read-only based on mode
@@ -298,8 +299,11 @@ class EntryForm(QWidget):
 
     def get_entry_data(self) -> dict:
         """Get form data as dictionary"""
+        title = self.title.text().strip()
+        print(f"Getting form data - title: '{title}'")
+        
         return {
-            "title": self.title.text().strip(),
+            "title": title,
             "username": self.username.text().strip(),
             "password": self.password.text(),
             "url": self.url.text().strip(),
@@ -407,7 +411,7 @@ class EntryForm(QWidget):
             self.category.setCurrentIndex(self.category.count() - 1)
     
     @async_callback
-    async def save_entry(self):
+    async def save_entry(self, *args):
         """Save the current entry"""
         if not self.api_client:
             # Get API client from parent if not provided
@@ -430,14 +434,21 @@ class EntryForm(QWidget):
             # Get entry data
             entry_data = self.get_entry_data()
             
+            # Debug
+            print(f"Saving entry with mode: {self.current_mode}, ID: {self.current_entry_id}")
+            print(f"Entry data: {entry_data}")
+            
             if self.current_mode == "add" or not self.current_entry_id:
                 # Create new entry
                 result = await self.api_client.create_entry(entry_data)
                 self.current_entry_id = result.id
                 self.show_success("Entry created successfully")
+                print(f"Created new entry with ID: {self.current_entry_id}")
             else:
                 # Update existing entry
-                await self.api_client.update_entry(self.current_entry_id, entry_data)
+                print(f"Updating entry {self.current_entry_id}")
+                result = await self.api_client.update_entry(self.current_entry_id, entry_data)
+                print(f"Update result: {result}")
                 self.show_success("Entry updated successfully")
             
             # Switch to view mode
@@ -446,9 +457,19 @@ class EntryForm(QWidget):
             # Emit saved signal
             self.saved.emit(self.current_entry_id)
             
+            # Trigger a complete refresh in the parent VaultView
+            parent = self.parent()
+            if parent and hasattr(parent, 'refresh_data'):
+                print("Triggering full refresh after save")
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, parent.refresh_data)
+            
         except APIError as e:
             self.show_error(e)
         except Exception as e:
+            print(f"Error saving entry: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.show_error(e)
         finally:
             self.show_loading(False)
@@ -468,14 +489,22 @@ class EntryForm(QWidget):
             return
         
         try:
+            # Show loading
+            self.show_loading(True)
+            
             # Delete entry from API
-            await self.api_client.delete_entry(self.current_entry_id)
+            print(f"Deleting entry {self.current_entry_id}")
+            result = await self.api_client.delete_entry(self.current_entry_id)
+            print(f"Delete result: {result}")
+            
+            # Store the ID before clearing
+            deleted_id = self.current_entry_id
             
             # Clear form
             self.clear()
             
-            # Emit deleted signal
-            self.deleted.emit(self.current_entry_id)
+            # Emit deleted signal with the ID
+            self.deleted.emit(deleted_id)
             
             # Show success message
             QMessageBox.information(self, "Success", "Entry deleted successfully")
@@ -484,6 +513,8 @@ class EntryForm(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to delete entry: {e.message}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete entry: {str(e)}")
+        finally:
+            self.show_loading(False)
 
     def show_error(self, error: Exception):
         """Display error message with appropriate styling"""

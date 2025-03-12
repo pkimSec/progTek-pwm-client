@@ -194,10 +194,10 @@ class APIClient:
         if include_auth and self._access_token:
             headers['Authorization'] = f'Bearer {self._access_token}'
         
-        # Add session token if available - use proper header name
-        if self._session_token:
+        # Add session token if available - ensure this runs for ALL requests
+        if hasattr(self, '_session_token') and self._session_token:
             headers['X-API-Session-Token'] = self._session_token
-            
+        
         return headers
 
     async def _handle_response(self, response: aiohttp.ClientResponse) -> Any:
@@ -622,13 +622,27 @@ class APIClient:
             vault = get_vault()
             if not vault.is_unlocked():
                 # Try to unlock with master password and salt
-                if hasattr(self, '_master_password') and hasattr(self.user_session, 'vault_salt'):
+                if hasattr(self, '_master_password') and hasattr(self, 'user_session') and hasattr(self.user_session, 'vault_salt'):
                     vault.unlock(self._master_password, self.user_session.vault_salt)
                 else:
                     raise ValueError("Vault is locked and cannot encrypt data")
             
+            # Log entry data for debugging
+            print(f"Entry data before encryption: {entry_data}")
+            
+            # Ensure title is included
+            if 'title' not in entry_data or not entry_data['title']:
+                raise ValueError("Title is required")
+            
             # Encrypt the entry data
             encrypted_data = vault.encrypt_entry(entry_data)
+
+        # Send to server
+        data = {'encrypted_data': encrypted_data}
+        print(f"Sending update for entry {entry_id} with data: {encrypted_data[:30]}...")
+        response = await self._request('PUT', self.endpoints.vault_entry(entry_id), data)
+        print(f"Update response: {response}")
+        return response
 
     async def delete_entry(self, entry_id: int):
         """Delete password entry"""
