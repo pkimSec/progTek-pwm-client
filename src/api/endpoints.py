@@ -30,6 +30,10 @@ class APIEndpoints:
         return self._url('/api/login')
 
     @property
+    def admin_system(self) -> str:
+        return self._url('/api/admin/system')
+
+    @property
     def logout(self) -> str:
         return self._url('/api/logout')
 
