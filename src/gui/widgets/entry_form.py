@@ -11,9 +11,9 @@ from gui.widgets.strength_meter import PasswordStrengthMeter
 from api.client import APIClient
 from api.models import APIError, PasswordEntry
 from utils.async_utils import async_callback
-import json
-import base64
-import time
+
+import json, base64, time
+from typing import Optional, Dict, Any
 
 class EntryForm(QWidget):
     """Widget for editing password entries"""
@@ -387,6 +387,72 @@ class EntryForm(QWidget):
         except APIError as e:
             self.show_error(e)
         except Exception as e:
+            self.show_error(e)
+        finally:
+            self.show_loading(False)
+
+    def load_entry_from_cache(self, entry_id: int, entry: PasswordEntry, 
+                            decrypted_data: Optional[dict], vault_locked: bool = False):
+        """Load an entry from cached data without making an API call"""
+        try:
+            # Show loading
+            self.show_loading(True)
+            
+            # Store entry ID
+            self.current_entry_id = entry_id
+            
+            # If vault is locked or no decrypted data, show placeholder data
+            if vault_locked or decrypted_data is None:
+                entry_data = {
+                    "title": f"Entry {entry_id} (Locked)",
+                    "username": "[Encrypted]",
+                    "password": "[Encrypted]",
+                    "url": "[Encrypted]",
+                    "category": "Unknown",
+                    "category_id": None,
+                    "notes": "The vault is locked. Unlock it to view entry details.",
+                    "created_at": entry.created_at.isoformat() if hasattr(entry, 'created_at') else "",
+                    "updated_at": entry.updated_at.isoformat() if hasattr(entry, 'updated_at') else ""
+                }
+            else:
+                # Use the decrypted data
+                entry_data = decrypted_data
+                # Add the timestamps if not present
+                if 'created_at' not in entry_data and hasattr(entry, 'created_at'):
+                    entry_data['created_at'] = entry.created_at.isoformat()
+                if 'updated_at' not in entry_data and hasattr(entry, 'updated_at'):
+                    entry_data['updated_at'] = entry.updated_at.isoformat()
+            
+            # Fill form fields
+            self.title.setText(entry_data.get("title", ""))
+            self.username.setText(entry_data.get("username", ""))
+            self.password.setText(entry_data.get("password", ""))
+            self.url.setText(entry_data.get("url", ""))
+            
+            # Set category if exists
+            if 'category_id' in entry_data and entry_data['category_id'] is not None:
+                category_data = {
+                    'id': entry_data['category_id'],
+                    'name': entry_data.get('category', '')
+                }
+                self.set_category(category_data)
+            else:
+                # Default to "None"
+                self.category.setCurrentIndex(0)
+            
+            self.notes.setText(entry_data.get("notes", ""))
+            
+            # Set metadata
+            self.created_label.setText(entry_data.get("created_at", ""))
+            self.updated_label.setText(entry_data.get("updated_at", ""))
+            
+            # Set mode to view
+            self.set_mode("view")
+            
+        except Exception as e:
+            print(f"Error loading entry from cache: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.show_error(e)
         finally:
             self.show_loading(False)

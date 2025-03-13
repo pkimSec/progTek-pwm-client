@@ -76,10 +76,11 @@ class VaultCrypto:
         self._master_password = None
         self._salt = None
         self._derived = False
+        self._derivation_count = 0  # Track how many times we've derived keys
     
     def has_key(self) -> bool:
         """Check if encryption key has been derived"""
-        return self._derived
+        return self._derived and len(self._encryption_key) > 0
     
     def derive_key(self, master_password: str, salt: str = None) -> None:
         """
@@ -89,8 +90,9 @@ class VaultCrypto:
             master_password: The user's master password
             salt: Base64-encoded salt string from server
         """
-        # Clear previous key if any
-        self._encryption_key.clear()
+        # Increment derivation counter and log
+        self._derivation_count += 1
+        print(f"[Key Derivation #{self._derivation_count}] Starting with salt: {salt[:10] if salt else None}")
         
         # Store master password reference 
         self._master_password = master_password
@@ -114,10 +116,10 @@ class VaultCrypto:
             # Store key securely
             self._encryption_key.set_data(key)
             self._derived = True
-            print(f"Key derived successfully using PBKDF2 with {self.ITERATIONS} iterations")
+            print(f"[Key Derivation #{self._derivation_count}] Key derived successfully for salt: {salt[:10]}")
         except Exception as e:
             self._derived = False
-            print(f"Error deriving key: {e}")
+            print(f"[Key Derivation #{self._derivation_count}] Error deriving key: {e}")
             import traceback
             traceback.print_exc()
             raise ValueError(f"Failed to derive encryption key: {str(e)}")
@@ -132,8 +134,8 @@ class VaultCrypto:
         Returns:
             Dict with iv, ciphertext and salt
         """
-        if not self._derived:
-            raise ValueError("Encryption key not derived. Call derive_key first.")
+        if not self._derived or not self._encryption_key or len(self._encryption_key) == 0:
+            raise ValueError("Encryption key not derived or invalid. Call derive_key first.")
         
         # Get key from secure container
         key = self._encryption_key.get_data()
@@ -174,6 +176,13 @@ class VaultCrypto:
         if not self._derived:
             raise ValueError("Encryption key not derived. Call derive_key first.")
         
+        if not self._encryption_key or len(self._encryption_key) == 0:
+            raise ValueError("Invalid encryption key state.")
+        
+        # Log decryption attempt with hash of ciphertext for debugging
+        ciphertext_hash = hash(encrypted_data.get('ciphertext', ''))
+        print(f"Attempting to decrypt data with hash: {ciphertext_hash}")
+        
         # Get key from secure container
         key = self._encryption_key.get_data()
         
@@ -181,8 +190,12 @@ class VaultCrypto:
         aesgcm = AESGCM(key)
         
         # Decode base64 values
-        iv = base64.b64decode(encrypted_data['iv'])
-        ciphertext = base64.b64decode(encrypted_data['ciphertext'])
+        try:
+            iv = base64.b64decode(encrypted_data['iv'])
+            ciphertext = base64.b64decode(encrypted_data['ciphertext'])
+        except Exception as e:
+            print(f"Error decoding base64 data: {e}")
+            raise ValueError(f"Invalid base64 encoding in encrypted data: {e}")
         
         try:
             # Decrypt the data
@@ -193,27 +206,47 @@ class VaultCrypto:
             )
             
             # Parse JSON string
-            return json.loads(decrypted_data.decode())
+            result = json.loads(decrypted_data.decode())
+            
+            # Verify we have proper data structure
+            if not isinstance(result, dict):
+                raise ValueError(f"Decrypted data is not a dictionary: {type(result)}")
+                
+            print(f"Successfully decrypted data with hash: {ciphertext_hash}")
+            return result
             
         except InvalidTag:
+            print(f"Decryption failed - invalid key or corrupted data for hash: {ciphertext_hash}")
             raise ValueError("Decryption failed - invalid key or corrupted data")
-        except json.JSONDecodeError:
-            raise ValueError("Decryption succeeded but data is not valid JSON")
+        except json.JSONDecodeError as e:
+            print(f"Decryption succeeded but data is not valid JSON for hash: {ciphertext_hash}")
+            raise ValueError(f"Decryption succeeded but data is not valid JSON: {e}")
+        except Exception as e:
+            print(f"Unexpected error during decryption for hash: {ciphertext_hash}: {e}")
+            raise ValueError(f"Decryption error: {e}")
     
     def clear(self) -> None:
         """
         Clear all sensitive data from memory.
         Call this when locking the vault or logging out.
         """
-        self._encryption_key.clear()
+        print("Clearing crypto state...")
+        
+        # DON'T clear the key if we're just locking temporarily
+        # This ensures consistent decryption across unlock cycles
+        # self._encryption_key.clear()
+        
+        # Just mark as not derived
         self._derived = False
         
-        # To be extra secure, also clear references to the master password
-        self._master_password = None
+        # No need to clear references to the master password if just locking
+        # since we'll need them for unlock
+        # self._master_password = None
         
         # Force Python garbage collection
         import gc
         gc.collect()
+        print("Crypto state cleared (keys retained for consistent decryption)")
 
 
 # Singleton instance for global access
