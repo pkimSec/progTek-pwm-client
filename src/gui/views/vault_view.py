@@ -240,22 +240,28 @@ class VaultView(QWidget):
     
     def on_entry_selected(self, entry_id: int):
         """Handle entry selection"""
-        # Check if entry exists
+        # Check if entry exists in local cache
         if entry_id in self.entry_list.entries:
-            # Get entry data
+            # Get entry data from local cache
             item, entry, decrypted_data = self.entry_list.entries[entry_id]
             
-            # If we couldn't decrypt it earlier, try again
+            # If we couldn't decrypt it earlier, try again locally
             if decrypted_data is None:
                 vault = get_vault()
                 if vault.is_unlocked():
                     try:
                         decrypted_data = vault.decrypt_entry(entry.encrypted_data)
+                        # Update the cache with the successfully decrypted data
+                        self.entry_list.entries[entry_id] = (item, entry, decrypted_data)
+                        print(f"Successfully decrypted entry {entry_id} on selection")
                     except Exception as e:
                         print(f"Error decrypting entry {entry_id}: {e}")
             
-            # Load entry in form
-            self.entry_form.load_entry(entry_id, vault_locked=(not get_vault().is_unlocked()))
+            # Use our new method to load entry from cache instead of making a server request
+            self.entry_form.load_entry_from_cache(entry_id, entry, decrypted_data, 
+                                                vault_locked=(not get_vault().is_unlocked()))
+        else:
+            print(f"Warning: Selected entry {entry_id} not found in local cache")
     
     def on_entry_saved(self, entry_id: int):
         """Handle entry saved event"""
@@ -502,30 +508,72 @@ class VaultView(QWidget):
                     self.api_client.user_session = self.parent().user_session
                     print("Linked user_session to api_client during refresh")
                     
+            # Clear any ongoing refresh timer to prevent overlapping refreshes
+            if hasattr(self, '_refresh_timer'):
+                try:
+                    self._refresh_timer.stop()
+                except:
+                    pass
+            
             # Ensure the entry_list has the API client
             if hasattr(self, 'entry_list'):
                 self.entry_list.api_client = self.api_client
                 
-                # Completely reload entries
-                if hasattr(self.entry_list, 'reload_all_entries'):
-                    self.entry_list.reload_all_entries(force_display=True)
-                else:
-                    self.entry_list.load_entries_sync()
-                    
-                # Schedule a display refresh
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(500, lambda: self.entry_list.force_display_refresh() if hasattr(self.entry_list, 'force_display_refresh') else None)
-                    
-            # Also refresh categories
-            print("Refreshing categories...")
-            if hasattr(self, 'category_tree') and hasattr(self.category_tree, 'load_categories'):
-                self.category_tree.load_categories()
+                # Disable UI during refresh to prevent race conditions
+                self.setEnabled(False)
                 
-            self.status_label.setText("Data refreshed successfully")
+                # Use QTimer to ensure sequential operations
+                from PyQt6.QtCore import QTimer
+                self._refresh_timer = QTimer()
+                
+                def refresh_sequence():
+                    # Step 1: Reload entries
+                    print("Step 1: Reloading entries")
+                    if hasattr(self.entry_list, 'reload_all_entries'):
+                        self.entry_list.reload_all_entries(force_display=False)
+                    else:
+                        self.entry_list.load_entries_sync()
+                    
+                    # Schedule next step
+                    QTimer.singleShot(800, perform_display_refresh)
+                
+                def perform_display_refresh():
+                    # Step 2: Refresh display
+                    print("Step 2: Refreshing display")
+                    if hasattr(self.entry_list, 'force_display_refresh'):
+                        self.entry_list.force_display_refresh()
+                    
+                    # Schedule next step
+                    QTimer.singleShot(500, refresh_categories)
+                
+                def refresh_categories():
+                    # Step 3: Refresh categories
+                    print("Step 3: Refreshing categories")
+                    if hasattr(self, 'category_tree') and hasattr(self.category_tree, 'load_categories'):
+                        self.category_tree.load_categories()
+                    
+                    # Schedule final step
+                    QTimer.singleShot(500, completion)
+                
+                def completion():
+                    print("Refresh sequence complete")
+                    self.setEnabled(True)
+                    self.status_label.setText("Data refreshed successfully")
+                    
+                    # Clear the timer reference
+                    if hasattr(self, '_refresh_timer'):
+                        self._refresh_timer = None
+                
+                # Start the sequence
+                refresh_sequence()
+                
+            else:
+                self.status_label.setText("Error: Entry list not available")
             
         except Exception as e:
             print(f"Error refreshing data: {str(e)}")
             import traceback
             traceback.print_exc()
             self.status_label.setText(f"Error: {str(e)}")
+            self.setEnabled(True)  # Re-enable UI even if error
             QMessageBox.critical(self, "Error", f"Failed to refresh data: {str(e)}")

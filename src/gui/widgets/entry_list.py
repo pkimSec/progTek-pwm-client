@@ -22,6 +22,7 @@ class EntryListItem(QListWidgetItem):
         self.entry_id = entry.id
         self.entry_data = entry
         self.decrypted_data = decrypted_data
+        self._reload_task = None  # Track ongoing reloads
         
         # Extract information from decrypted data if available
         if decrypted_data:
@@ -229,9 +230,19 @@ class EntryList(QWidget):
     async def process_entries(self, entries: list[PasswordEntry]):
         """Process entries after loading from server"""
         try:
-            # Clear current entries
+            # Keep track of the previously selected entry ID
+            selected_items = self.list.selectedItems()
+            previously_selected_id = None
+            if selected_items and hasattr(selected_items[0], 'entry_id'):
+                previously_selected_id = selected_items[0].entry_id
+            
+            # Clear entry list UI but keep a copy of old entries for comparison
+            old_entries = self.entries.copy()
             self.list.clear()
-            self.entries = {}
+            
+            # Important: Don't immediately clear entries dict
+            # We'll replace it with new data only if decryption is successful
+            new_entries = {}
             
             # Get vault instance
             vault = get_vault()
@@ -264,32 +275,103 @@ class EntryList(QWidget):
                     
             # Process each entry
             successful_entries = 0
+            entry_ids_processed = set()
+            decryption_failures = 0
+            
             for entry in entries:
                 try:
-                    print(f"Processing entry {entry.id}, encrypted_data length: {len(entry.encrypted_data)}")
-                    decrypted_data = vault.decrypt_entry(entry.encrypted_data)
-                    print(f"Successfully decrypted entry {entry.id}: {decrypted_data.get('title', 'Unknown')}")
+                    entry_id = entry.id
+                    entry_ids_processed.add(entry_id)
+                    print(f"Processing entry {entry_id}, encrypted_data length: {len(entry.encrypted_data)}")
+                    
+                    # Try to decrypt
+                    decrypted_data = None
+                    
+                    # First try to get from existing entries if the encrypted data hasn't changed
+                    if entry_id in old_entries:
+                        old_item, old_entry, old_decrypted = old_entries[entry_id]
+                        if old_entry.encrypted_data == entry.encrypted_data and old_decrypted is not None:
+                            print(f"Using cached decryption for entry {entry_id}")
+                            decrypted_data = old_decrypted
+                    
+                    # If not found in cache, decrypt
+                    if decrypted_data is None:
+                        try:
+                            # Before attempting decryption, make sure vault is in proper state
+                            if not vault.is_unlocked():
+                                raise ValueError("Vault locked before decryption attempt")
+                                
+                            decrypted_data = vault.decrypt_entry(entry.encrypted_data)
+                            print(f"Successfully decrypted entry {entry_id}: {decrypted_data.get('title', 'Unknown')}")
+                            
+                            # Validate decrypted data has required fields
+                            if 'title' not in decrypted_data or not decrypted_data['title']:
+                                print(f"Warning: Entry {entry_id} has no title, using default")
+                                decrypted_data['title'] = f"Entry {entry_id}"
+                                
+                            successful_entries += 1
+                        except Exception as decrypt_err:
+                            print(f"Error decrypting entry {entry_id}: {decrypt_err}")
+                            import traceback
+                            traceback.print_exc()
+                            decryption_failures += 1
+                            
+                            # Try to restore from previous data if available
+                            if entry_id in old_entries and old_entries[entry_id][2] is not None:
+                                print(f"Using previous decryption data for entry {entry_id}")
+                                decrypted_data = old_entries[entry_id][2]
+                                successful_entries += 1
+                    else:
+                        successful_entries += 1
                     
                     # Create list item with decrypted data
                     item = EntryListItem(entry, decrypted_data)
                     self.list.addItem(item)
-                    self.entries[entry.id] = (item, entry, decrypted_data)
-                    successful_entries += 1
+                    new_entries[entry_id] = (item, entry, decrypted_data)
+                    
+                    # If this was previously selected, reselect it
+                    if entry_id == previously_selected_id:
+                        self.list.setCurrentItem(item)
                     
                 except Exception as e:
-                    print(f"Error decrypting entry {entry.id}: {e}")
+                    print(f"Error processing entry {entry.id}: {e}")
                     import traceback
                     traceback.print_exc()
                     # Add with minimal data
                     item = EntryListItem(entry)
                     self.list.addItem(item)
-                    self.entries[entry.id] = (item, entry, None)
+                    new_entries[entry_id] = (item, entry, None)
             
-            print(f"Processed {successful_entries} entries successfully out of {len(entries)}")
+            # Check for any entries that were removed from the server
+            removed_entries = set(old_entries.keys()) - entry_ids_processed
+            if removed_entries:
+                print(f"Detected {len(removed_entries)} entries removed from server: {removed_entries}")
+            
+            # Check if decryption was mostly successful 
+            if successful_entries > 0 and decryption_failures < len(entries) / 2:
+                # Update with new entries
+                self.entries = new_entries
+                print(f"Processed {successful_entries} entries successfully out of {len(entries)}")
+            else:
+                # If we had more failures than successes, keep the old entries
+                print(f"WARNING: Too many decryption failures ({decryption_failures}/{len(entries)}), keeping previous data")
+                if old_entries:
+                    self.entries = old_entries
+                    # Rebuild entry list with old entries
+                    self.list.clear()
+                    for entry_id, (old_item, old_entry, old_data) in old_entries.items():
+                        item = EntryListItem(old_entry, old_data)
+                        self.list.addItem(item) 
+                        # Restore selection
+                        if entry_id == previously_selected_id:
+                            self.list.setCurrentItem(item)
+                else:
+                    # If we had no previous entries, use what we have
+                    self.entries = new_entries
             
             # Make sure the list is visible if we have entries
-            if len(entries) > 0:
-                print(f"Making list visible with {len(entries)} entries")
+            if len(self.entries) > 0:
+                print(f"Making list visible with {len(self.entries)} entries")
                 self.list.setVisible(True)
                 self.empty_label.setVisible(False)
                 self.status_label.setVisible(False)
@@ -299,14 +381,14 @@ class EntryList(QWidget):
                 
                 # Show count
                 if hasattr(self, 'count_label'):
-                    self.count_label.setText(f"{len(entries)} entries")
+                    self.count_label.setText(f"{len(self.entries)} entries")
                     self.count_label.setVisible(True)
             else:
                 self.status_label.setText("No entries found")
                 self.status_label.setVisible(True)
                 self.list.setVisible(False)
             
-            # Apply filters (with fix to ensure items stay visible)
+            # Apply filters in a reliable manner
             self.apply_filters(force_visibility=True)
             
         except Exception as e:
@@ -622,13 +704,14 @@ class EntryList(QWidget):
         print("Performing complete entry reload")
         
         try:
-            # Clear everything
-            self.list.clear()
-            self.entries = {}
-            
-            # Show loading
+            # Show loading indicator
             self.status_label.setText("Loading entries...")
             self.status_label.setVisible(True)
+            
+            # Cancel any ongoing operations
+            if hasattr(self, '_reload_task') and self._reload_task:
+                print("Cancelling previous reload task")
+                self._reload_task = None
             
             # Get a fresh API client if needed
             if not self.api_client and hasattr(self, 'parent'):
@@ -639,24 +722,59 @@ class EntryList(QWidget):
             if not self.api_client:
                 self.status_label.setText("No API client available")
                 return
-                    
+            
+            # Mark this as an active task
+            self._reload_task = True
+            
+            # Capture selected entry ID before clearing
+            selected_items = self.list.selectedItems()
+            previously_selected_id = None
+            if selected_items and hasattr(selected_items[0], 'entry_id'):
+                previously_selected_id = selected_items[0].entry_id
+                print(f"Saving selection state for entry: {previously_selected_id}")
+            
+            # Clear the list UI but don't clear entries dictionary yet
+            # (entries will be cleared in process_entries)
+            self.list.clear()
+            
             # Load the entries through the load_entries_sync method
             self.load_entries_sync()
             
-            # Force display if requested
+            # Force display if requested, with a delay to ensure entries are loaded
             if force_display:
                 from PyQt6.QtCore import QTimer
-                QTimer.singleShot(300, self.force_display_refresh)
+                QTimer.singleShot(500, self.force_display_refresh)
+            
+            # Restore selection if possible, with a delay
+            if previously_selected_id is not None:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(600, lambda: self.restore_selection(previously_selected_id))
         
         except Exception as e:
             print(f"Error in reload_all_entries: {str(e)}")
             import traceback
             traceback.print_exc()
             self.status_label.setText(f"Error: {str(e)}")
+        finally:
+            # Clear the task flag
+            self._reload_task = None
             
-        # Make sure count is updated
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(500, self.update_count)
+            # Make sure count is updated with a delay
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(700, self.update_count)
+
+    def restore_selection(self, entry_id):
+        """Restore selection to previously selected entry"""
+        try:
+            if entry_id in self.entries:
+                item, _, _ = self.entries[entry_id]
+                self.list.setCurrentItem(item)
+                print(f"Restored selection to entry: {entry_id}")
+                
+                # Emit selection signal to update the form
+                self.entry_selected.emit(entry_id)
+        except Exception as e:
+            print(f"Error restoring selection: {str(e)}")
     
     def on_sort_changed(self, sort_field: str):
         """Handle sort field change"""
@@ -681,62 +799,93 @@ class EntryList(QWidget):
         self.apply_sort()
     
     def apply_sort(self):
-        """Apply current sort settings to the list"""
+        """Apply current sort settings to the list reliably"""
         try:
-            # First, apply basic sorting by text
-            self.list.sortItems(self.current_sort_order)
-            
-            # Skip custom sorting for title since the basic sort already handles it
-            if self.current_sort_field == "title":
+            # Special case for empty list
+            if self.list.count() == 0:
                 return
                 
-            # Custom sorting for non-title fields - make a safe copy
+            # Save currently selected item reference
+            current_item = self.list.currentItem()
+            current_id = None
+            if current_item and hasattr(current_item, "entry_id"):
+                current_id = current_item.entry_id
+                
+            # Create mapping of all items for stable sort
+            items_map = {}
+            for i in range(self.list.count()):
+                item = self.list.item(i)
+                if item and hasattr(item, "entry_id"):
+                    items_map[item.entry_id] = item
+            
+            # Create list of visible items only
             visible_items = []
             for i in range(self.list.count()):
                 item = self.list.item(i)
-                if item and not item.isHidden():
+                if item and not item.isHidden() and hasattr(item, "entry_id"):
                     visible_items.append(item)
-            
-            if not visible_items:
-                return  # No items to sort
-            
-            # Sort items based on selected field
-            if self.current_sort_field == "username":
-                # Safe sort - check if attribute exists before using it
-                def get_username(x):
-                    if hasattr(x, 'username') and x.username:
-                        return x.username.lower()
-                    return x.text().lower()
                     
-                visible_items.sort(
-                    key=get_username, 
-                    reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder)
-                )
-            elif self.current_sort_field == "updated_at":
-                # Safe sort with fallback for entries without updated_at
-                def get_update_time(x):
-                    if hasattr(x, 'entry_data') and hasattr(x.entry_data, 'updated_at'):
-                        return x.entry_data.updated_at
-                    elif hasattr(x, 'updated_at'):
-                        return x.updated_at
-                    else:
-                        from datetime import datetime
-                        return datetime.min
-                        
-                visible_items.sort(
-                    key=get_update_time,
-                    reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder)
-                )
-            
-            # Only modify list if we have items to sort
-            if visible_items:
-                # Take all items from the list without deleting them
-                for i in range(self.list.count()-1, -1, -1):
-                    self.list.takeItem(i)
+            if not visible_items:
+                return  # No visible items to sort
                 
-                # Re-add in sorted order
-                for item in visible_items:
-                    self.list.addItem(item)
+            # Define sort key function based on current sort field
+            def get_sort_key(item):
+                if not hasattr(item, "entry_id"):
+                    return ""  # Fallback for invalid items
+                    
+                entry_id = item.entry_id
+                
+                # Get entry data from dictionary
+                if entry_id in self.entries:
+                    _, _, decrypted_data = self.entries[entry_id]
+                    
+                    # Use decrypted data if available
+                    if decrypted_data is not None:
+                        if self.current_sort_field == "title":
+                            return decrypted_data.get("title", "").lower()
+                        elif self.current_sort_field == "username":
+                            return decrypted_data.get("username", "").lower()
+                        elif self.current_sort_field == "updated_at":
+                            return decrypted_data.get("updated_at", "")
+                
+                # Fallback to item text
+                return item.text().lower()
+                
+            # Sort the visible items
+            visible_items.sort(
+                key=get_sort_key,
+                reverse=(self.current_sort_order == Qt.SortOrder.DescendingOrder)
+            )
+            
+            # Take all items without deleting them
+            all_items = []
+            for i in range(self.list.count()):
+                all_items.append(self.list.takeItem(0))
+                
+            # Create a new ordering with visible items first, then hidden items
+            new_order = []
+            
+            # First add the visible items in sorted order
+            visible_ids = set(item.entry_id for item in visible_items if hasattr(item, "entry_id"))
+            new_order.extend(visible_items)
+            
+            # Then add all hidden items in their original order
+            for item in all_items:
+                if item and hasattr(item, "entry_id") and item.entry_id not in visible_ids:
+                    new_order.append(item)
+            
+            # Add items back to the list in new order
+            for item in new_order:
+                self.list.addItem(item)
+                
+            # Restore selection if possible
+            if current_id is not None:
+                for i in range(self.list.count()):
+                    item = self.list.item(i)
+                    if item and hasattr(item, "entry_id") and item.entry_id == current_id:
+                        self.list.setCurrentItem(item)
+                        break
+                        
         except Exception as e:
             print(f"Error during sorting: {str(e)}")
             import traceback
