@@ -254,11 +254,13 @@ class SettingsView(QWidget):
             reply = QMessageBox.question(
                 self,
                 "Vault Access",
-                "To apply the new password, your vault needs to be locked and unlocked again. "
+                "To apply the new password, you need to log out and log back in. "
                 "Would you like to do this now?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes
             )
             
-            if reply == QMessageBox.StandardButton.Yes and hasattr(main_window, 'lock_vault'):
-                main_window.lock_vault()
+            if reply == QMessageBox.StandardButton.Yes and hasattr(main_window, 'handle_logout'):
+                # Use QTimer to delay the logout to ensure this function completes first
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, main_window.handle_logout)

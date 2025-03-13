@@ -141,15 +141,32 @@ class PasswordChangeDialog(BaseDialog):
                 # Emit signal
                 parent_dialog.password_changed.emit()
                 
-                # Close dialog
-                parent_dialog.accept()
+                # Store a reference to the new password (optional, for auto re-login)
+                if hasattr(parent_dialog.api_client, 'set_master_password'):
+                    parent_dialog.api_client.set_master_password(parent_dialog.new_password.text())
+                
+                # Close dialog with a small delay to ensure success message is displayed
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(1500, parent_dialog.accept)
                 
             except Exception as e:
-                parent_dialog.show_error(e)
-                parent_dialog.change_btn.setEnabled(True)
-                parent_dialog.cancel_btn.setEnabled(True)
+                try:
+                    # Only show error if dialog still exists
+                    if parent_dialog and parent_dialog.isVisible():
+                        parent_dialog.show_error(e)
+                        parent_dialog.change_btn.setEnabled(True)
+                        parent_dialog.cancel_btn.setEnabled(True)
+                except RuntimeError:
+                    # Dialog already deleted, log the error instead
+                    print(f"Error changing password: {e}")
             finally:
-                parent_dialog.show_loading(False)
+                try:
+                    # Only hide loading if dialog still exists
+                    if parent_dialog and parent_dialog.isVisible():
+                        parent_dialog.show_loading(False)
+                except RuntimeError:
+                    # Dialog already deleted, ignore
+                    pass
         
         # Call the async function, passing self as the parameter
         perform_password_change(self)
