@@ -345,22 +345,68 @@ class PasswordManagerApp(QObject):
         # Fetch vault salt before showing main window
         self.fetch_salt_and_continue(login_dialog_to_close)
 
+    def handle_login_error(self):
+        """Handle login errors gracefully"""
+        print("Handling login error")
+        # Display an error message
+        QMessageBox.critical(
+            None,
+            "Login Error",
+            "There was an error logging in. The application will now restart.",
+            QMessageBox.StandardButton.Ok
+        )
+        
+        # Clean up resources
+        self.clear_session_data()
+        
+        # Show login dialog again
+        QTimer.singleShot(100, self.show_login_dialog)
+
     @async_callback
     async def fetch_salt_and_continue(self, login_dialog_to_close=None):
         """Fetch vault salt and then show main window"""
         try:
             print("Fetching vault salt before showing main window...")
-            salt = await self.api_client.get_vault_salt()
             
-            if salt:
-                print(f"Successfully retrieved vault salt: {salt[:10]}...")
-                self.user_session.set_vault_salt(salt)
-                self.user_session.save(Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config') / 'password_manager')
-                
-                # Now set the master password to unlock the vault
-                self.api_client.set_master_password(self.api_client._master_password)
-            else:
-                print("Warning: Could not retrieve vault salt")
+            # Check if API client exists
+            if not self.api_client:
+                print("Warning: API client is None, creating a new one")
+                # Create a new API client from the session data
+                if hasattr(self, 'user_session') and self.user_session:
+                    self.api_client = APIClient(self.config.api_base_url)
+                    self.api_client._access_token = self.user_session.access_token
+                    self.api_client._session_token = self.user_session.session_token
+                    if hasattr(self.user_session, 'master_password') and self.user_session.master_password:
+                        self.api_client._master_password = self.user_session.master_password
+                    if hasattr(self.user_session, '_user_email'):
+                        self.api_client._user_email = self.user_session._user_email
+                    
+                    # Associate user_session with api_client
+                    self.api_client.user_session = self.user_session
+                else:
+                    print("Cannot create API client - missing user session data")
+                    
+            # If we now have an API client, try to fetch salt
+            if self.api_client:
+                try:
+                    salt = await self.api_client.get_vault_salt()
+                    
+                    if salt:
+                        print(f"Successfully retrieved vault salt: {salt[:10]}...")
+                        self.user_session.set_vault_salt(salt)
+                        self.user_session.save(Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config') / 'password_manager')
+                        
+                        # Now set the master password to unlock the vault
+                        if hasattr(self.api_client, '_master_password') and self.api_client._master_password:
+                            self.api_client.set_master_password(self.api_client._master_password)
+                    else:
+                        print("Warning: Could not retrieve vault salt")
+                except Exception as e:
+                    print(f"Error getting salt: {str(e)}")
+                    # Continue without salt - the main window will try again
+        except TypeError as e:
+            print(f"Type error fetching vault salt: {str(e)}")
+            # Continue despite the error
         except Exception as e:
             print(f"Error fetching vault salt: {str(e)}")
             import traceback
@@ -380,10 +426,18 @@ class PasswordManagerApp(QObject):
                 except Exception as e:
                     print(f"Error closing login dialog: {str(e)}")
             
+            # Make sure we have a valid API client before showing the main window
+            if not self.api_client and hasattr(self, 'user_session') and self.user_session:
+                print("Re-creating API client as final fallback")
+                self.api_client = APIClient(self.config.api_base_url)
+                self.api_client._access_token = self.user_session.access_token
+                self.api_client._session_token = self.user_session.session_token
+                self.api_client.user_session = self.user_session
+            
             # Schedule showing the main window
             QTimer.singleShot(0, self.show_main_window)
             self.session_timer.start()
-    
+        
     def show_main_window(self):
         """Show main application window"""
         print("Showing main window...")
@@ -396,6 +450,23 @@ class PasswordManagerApp(QObject):
                 except Exception as e:
                     print(f"Error closing existing window: {str(e)}")
                 self.main_window = None
+            
+            # Verify that we have a valid API client before creating the main window
+            if not self.api_client:
+                print("ERROR: Missing API client, cannot show main window")
+                # Re-create API client if needed
+                if hasattr(self, 'user_session') and self.user_session and self.user_session.access_token:
+                    print("Recreating API client from user session data")
+                    self.api_client = APIClient(self.config.api_base_url)
+                    self.api_client._access_token = self.user_session.access_token
+                    self.api_client._session_token = self.user_session.session_token
+                    if hasattr(self.user_session, 'master_password'):
+                        self.api_client._master_password = self.user_session.master_password
+                    self.api_client._user_email = self.user_session._user_email if hasattr(self.user_session, '_user_email') else None
+                else:
+                    print("Cannot recreate API client, missing user session data")
+                    self.handle_login_error()
+                    return
             
             print("Creating new MainWindow instance")
             self.main_window = MainWindow(self.api_client, self.user_session, self.config)
@@ -411,6 +482,9 @@ class PasswordManagerApp(QObject):
             print(f"Error showing main window: {str(e)}")
             import traceback
             traceback.print_exc()
+            
+            # Try to handle the error gracefully
+            self.handle_login_error()
     
     def _show_window(self):
         """Actually show the window - called by timer"""
@@ -464,8 +538,35 @@ class PasswordManagerApp(QObject):
         
         if client_to_use:
             try:
-                # Create a separate function to handle the async part
-                self._handle_logout_async(client_to_use)
+                # Use a more reliable approach for logout
+                import asyncio
+                
+                async def safe_logout():
+                    try:
+                        if hasattr(client_to_use, 'logout'):
+                            await client_to_use.logout()
+                        # Always close the session
+                        if hasattr(client_to_use, 'close'):
+                            await client_to_use.close()
+                    except Exception as e:
+                        print(f"Error during API logout: {str(e)}")
+                
+                # Try to get current event loop
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    # Create a new event loop if needed
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # Run the logout function
+                if loop.is_running():
+                    # Create a task if loop is already running
+                    asyncio.create_task(safe_logout())
+                else:
+                    # Otherwise run it directly
+                    loop.run_until_complete(safe_logout())
+                    
                 print("API logout initiated")
             except Exception as e:
                 print(f"Error initiating API logout: {str(e)}")

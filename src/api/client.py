@@ -489,16 +489,19 @@ class APIClient:
 
     async def change_password(self, current_password: str, new_password: str) -> Dict[str, Any]:
         """
-        Change user's password
+        Change user's password and re-encrypt vault entries
         
         Args:
             current_password (str): Current password
             new_password (str): New password
-            
+                
         Returns:
             Dict[str, Any]: Response containing new vault salt
         """
         print(f"Changing password for user")
+        
+        # Import needed modules at the top to avoid UnboundLocalError
+        from crypto.vault import get_vault
         
         data = {
             'current_password': current_password,
@@ -506,6 +509,21 @@ class APIClient:
         }
         
         try:
+            # First get all current entries
+            entries = await self.list_entries()
+            decrypted_entries = []
+            
+            # Decrypt entries with current password and salt
+            vault = get_vault()
+            if vault.is_unlocked():
+                for entry in entries:
+                    try:
+                        decrypted_data = vault.decrypt_entry(entry.encrypted_data)
+                        decrypted_entries.append((entry.id, decrypted_data))
+                    except Exception as e:
+                        print(f"Warning: Could not decrypt entry {entry.id}: {e}")
+            
+            # Now change the password
             response = await self._request('PUT', self.endpoints.change_password, data)
             
             # Update master password after successful change
@@ -514,7 +532,7 @@ class APIClient:
                 self._master_password = new_password
                 
                 # Try to unlock vault with new credentials
-                from crypto.vault import get_vault
+                # Note: get_vault is already imported at the top
                 vault = get_vault()
                 # First lock the vault to ensure clean state
                 try:
@@ -524,15 +542,29 @@ class APIClient:
                     print(f"Non-critical error while locking vault: {e}")
                     
                 # Now unlock with new credentials
-                if vault.unlock(new_password, response['new_salt']):
+                new_salt = response['new_salt']
+                if vault.unlock(new_password, new_salt):
                     print("Vault unlocked with new password")
+                    
+                    # Re-encrypt entries with new password and salt
+                    if decrypted_entries:
+                        print(f"Re-encrypting {len(decrypted_entries)} entries with new password")
+                        for entry_id, decrypted_data in decrypted_entries:
+                            try:
+                                # Encrypt with new key
+                                encrypted_data = vault.encrypt_entry(decrypted_data)
+                                # Update entry
+                                await self.update_entry(entry_id, encrypted_data)
+                                print(f"Successfully re-encrypted entry {entry_id}")
+                            except Exception as e:
+                                print(f"Error re-encrypting entry {entry_id}: {e}")
                 else:
                     print("WARNING: Failed to unlock vault with new password")
                 
                 # Update user_session if exists
                 if hasattr(self, 'user_session') and self.user_session:
                     self.user_session.master_password = new_password
-                    self.user_session.set_vault_salt(response['new_salt'])
+                    self.user_session.set_vault_salt(new_salt)
                     print("Updated user session with new credentials")
             
             return response
