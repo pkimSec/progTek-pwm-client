@@ -21,6 +21,7 @@ class ServerStatusWidget(QWidget):
         self.last_check_time = None
         self.offline_start_time = None
         self.last_offline_period = None
+        self.server_start_time = None  # Track server start time to detect restarts
         self.setup_ui()
         
         # Create timer to check server status every 15 seconds
@@ -186,6 +187,23 @@ class ServerStatusWidget(QWidget):
     
     def update_server_info(self, data: dict):
         """Update server information display"""
+        # Check for server restart
+        if 'start_time' in data and data['start_time'] and self.server_start_time is not None:
+            try:
+                new_start_time = data['start_time']
+                if new_start_time != self.server_start_time:
+                    print(f"Server restart detected! Old start time: {self.server_start_time}, New: {new_start_time}")
+                    # Show restart notification
+                    self.show_restart_notification()
+                    
+                    # Update stored start time
+                    self.server_start_time = new_start_time
+            except Exception as e:
+                print(f"Error checking server restart: {e}")
+        elif 'start_time' in data and data['start_time']:
+            # First time storing start time
+            self.server_start_time = data['start_time']
+        
         # Update hostname
         if 'hostname' in data:
             self.hostname_label.setText(f"Hostname: {data['hostname']}")
@@ -206,6 +224,25 @@ class ServerStatusWidget(QWidget):
                 self.uptime_label.setText(f"Uptime: {self.format_duration(uptime)}")
             except (ValueError, TypeError):
                 self.uptime_label.setText("Uptime: Unknown")
+                
+    def show_restart_notification(self):
+        """Show notification about server restart"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Create a warning message box
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle("Server Restarted")
+        msg_box.setText(
+            "The server has been restarted.\n\n"
+            "Your authentication may no longer be valid. "
+            "If you experience authentication errors, please log out and log in again "
+            "with the new credentials shown in the server console."
+        )
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        
+        # Show non-blocking message box to avoid interrupting the UI
+        msg_box.open()
     
     def format_duration(self, duration: timedelta) -> str:
         """Format a timedelta into a human-readable string"""

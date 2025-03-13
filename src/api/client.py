@@ -36,6 +36,7 @@ class APIClient:
         self._master_password: Optional[str] = None  # Store master password for vault operations
         self._user_email: Optional[str] = None  # Store user email for reconnection
         self._is_closing = False  # Flag to prevent multiple close attempts
+        self._auth_retry_count = 0
         
         # Cache this instance by base_url for reuse
         APIClient._instance_cache[base_url] = self
@@ -262,7 +263,27 @@ class APIClient:
 
                 # Check for 401 Unauthorized - token might be expired
                 if response.status == 401 and retry_auth and self._master_password and self._user_email:
-                    print("Token expired. Attempting to reauthenticate...")
+                    # Increment retry counter to prevent infinite loops
+                    self._auth_retry_count += 1
+                    
+                    # Only retry up to 3 times to prevent infinite loops
+                    if self._auth_retry_count > 3:
+                        print(f"Authentication retry limit exceeded ({self._auth_retry_count}), giving up")
+                        self._auth_retry_count = 0  # Reset for future requests
+                        
+                        # Read the response for error details
+                        try:
+                            error_data = await response.json()
+                            error_msg = error_data.get('message', 'Authentication failed')
+                        except:
+                            error_msg = "Authentication failed"
+                            
+                        raise APIError(
+                            message=f"Authentication failed after multiple retries. The server may have restarted with new credentials: {error_msg}",
+                            status_code=401
+                        )
+                    
+                    print(f"Token expired. Attempting to reauthenticate... (retry #{self._auth_retry_count})")
                     
                     # Try to reauthenticate and retry the request
                     try:
@@ -274,11 +295,18 @@ class APIClient:
                             self._session_token = login_response.session_token
                             print(f"Updated session token after reauthentication: {self._session_token}")
                         
+                        # Reset retry counter on success
+                        self._auth_retry_count = 0
+                        
                         # Retry the request with new token
                         return await self._request(method, url, data, include_auth, False)
                     except Exception as e:
                         print(f"Reauthentication failed: {str(e)}")
-                        # Let the original 401 error propagate
+                        # Let the original 401 error propagate but with more detail
+                        raise APIError(
+                            message=f"Failed to reauthenticate: {str(e)}. The server may have restarted.",
+                            status_code=401
+                        )
 
                 try:
                     print("Reading response content")
@@ -296,6 +324,8 @@ class APIClient:
                             status_code=response.status
                         )
 
+                    # Reset retry counter on success
+                    self._auth_retry_count = 0
                     return data
                 except Exception as e:
                     print(f"Error processing response: {str(e)}")

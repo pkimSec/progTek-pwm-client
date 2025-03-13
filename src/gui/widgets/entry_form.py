@@ -531,7 +531,34 @@ class EntryForm(QWidget):
                 QTimer.singleShot(100, parent.refresh_data)
             
         except APIError as e:
-            self.show_error(e)
+            # Special handling for server restart detection
+            if e.status_code == 401 and "retries" in str(e).lower():
+                from PyQt6.QtWidgets import QMessageBox
+                
+                # This is likely a server restart situation
+                error_message = (
+                    "The server appears to have restarted with new credentials. (Beta-Server)\n\n"
+                    "Your session is no longer valid. You'll need to log out and log in again "
+                    "with the new credentials shown in the server console."
+                )
+                
+                # Create a critical message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Critical)
+                msg_box.setWindowTitle("Server Restarted")
+                msg_box.setText(error_message)
+                msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg_box.exec()
+                
+                # Trigger logout from main window
+                main_window = self.window()
+                if main_window and hasattr(main_window, 'handle_logout'):
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(100, main_window.handle_logout)
+                
+            else:
+                # Standard error handling
+                self.show_error(e)
         except Exception as e:
             print(f"Error saving entry: {str(e)}")
             import traceback
