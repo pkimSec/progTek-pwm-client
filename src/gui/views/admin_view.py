@@ -13,7 +13,7 @@ from api.models import APIError
 from utils.async_utils import async_callback
 
 from gui.widgets.server_status import ServerStatusWidget
-
+from gui.widgets.session_manager import SessionManagerWidget
 
 class InviteDialog(QDialog):
     """Dialog to display generated invite code"""
@@ -555,7 +555,12 @@ class AdminView(QWidget):
         self.setup_invite_management_tab(invite_management_tab)
         self.tab_widget.addTab(invite_management_tab, "Invite Management")
         
-        # System Information tab (placeholder for future implementation)
+        # Session Management tab
+        session_management_tab = QWidget()
+        self.setup_session_management_tab(session_management_tab)
+        self.tab_widget.addTab(session_management_tab, "Session Management")
+        
+        # System Information tab
         system_tab = QWidget()
         self.setup_system_tab(system_tab)
         self.tab_widget.addTab(system_tab, "System Information")
@@ -627,6 +632,17 @@ class AdminView(QWidget):
         # Initial refresh of invite codes
         self.refresh_invite_codes()
     
+    def setup_session_management_tab(self, tab):
+        """Set up the session management tab"""
+        layout = QVBoxLayout(tab)
+        
+        # Session management widget
+        self.session_manager = SessionManagerWidget(self.api_client)
+        layout.addWidget(self.session_manager)
+        
+        # Add stretch to push everything to the top
+        layout.addStretch()
+
     def setup_system_tab(self, tab):
         """Set up the system information tab"""
         layout = QVBoxLayout(tab)
@@ -651,22 +667,6 @@ class AdminView(QWidget):
         database_layout.addWidget(database_info)
         
         layout.addWidget(database_group)
-        
-        # Active sessions section (placeholder for future implementation)
-        sessions_group = QGroupBox("Active Sessions")
-        sessions_layout = QVBoxLayout(sessions_group)
-        
-        sessions_info = QLabel(
-            "Active sessions information will be available in a future update.\n\n"
-            "Planned features:\n"
-            "- Current active sessions\n"
-            "- Session details\n"
-            "- Session management"
-        )
-        sessions_info.setWordWrap(True)
-        sessions_layout.addWidget(sessions_info)
-        
-        layout.addWidget(sessions_group)
         
         # System logs section (placeholder for future implementation)
         logs_group = QGroupBox("System Logs")

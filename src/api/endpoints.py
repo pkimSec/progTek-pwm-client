@@ -43,6 +43,13 @@ class APIEndpoints:
         return self._url('/api/register')
 
     @property
+    def admin_sessions(self) -> str:
+        return self._url('/api/admin/sessions')
+
+    def admin_session(self, session_token: str) -> str:
+        return self._url(f'/api/admin/sessions/{session_token}')
+
+    @property
     def users(self) -> str:
         return self._url('/api/users')
 
