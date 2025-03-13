@@ -30,6 +30,10 @@ class APIEndpoints:
         return self._url('/api/login')
 
     @property
+    def admin_system(self) -> str:
+        return self._url('/api/admin/system')
+
+    @property
     def logout(self) -> str:
         return self._url('/api/logout')
 
@@ -37,6 +41,13 @@ class APIEndpoints:
     def register(self) -> str:
         # Ensure this matches the server endpoint exactly
         return self._url('/api/register')
+
+    @property
+    def admin_sessions(self) -> str:
+        return self._url('/api/admin/sessions')
+
+    def admin_session(self, session_token: str) -> str:
+        return self._url(f'/api/admin/sessions/{session_token}')
 
     @property
     def users(self) -> str:

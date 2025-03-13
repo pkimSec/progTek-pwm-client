@@ -63,6 +63,19 @@ class MainWindow(QMainWindow):
         # Initialize vault state
         self.initialize_vault()
 
+    def connect_system_monitoring(self):
+        """Connect system monitoring signals"""
+        if hasattr(self, 'admin_view') and hasattr(self.admin_view, 'server_status'):
+            if hasattr(self.admin_view.server_status, 'status_changed'):
+                self.admin_view.server_status.status_changed.connect(self.on_server_status_changed)
+
+    def on_server_status_changed(self, is_online: bool):
+        """Handle server status changes"""
+        if is_online:
+            self.status_bar.showMessage("Server is online", 5000)
+        else:
+            self.status_bar.showMessage("Server is offline", 5000)
+
     def initialize_vault(self):
         """Initialize vault with master password and salt"""
         try:
@@ -201,6 +214,7 @@ class MainWindow(QMainWindow):
             self.tab_widget.addTab(self.admin_view, "Admin")
         
         layout.addWidget(self.tab_widget)
+        QTimer.singleShot(1000, self.connect_system_monitoring)
         
         # Set up status bar
         self.status_bar = QStatusBar()
@@ -294,6 +308,37 @@ class MainWindow(QMainWindow):
         else:
             print("MainWindow: Logout canceled")
     
+    def handle_server_restart(self):
+        """Handle server restart by alerting user and prompting for logout"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Store window size before showing dialog
+        self.config.window_width = self.width()
+        self.config.window_height = self.height()
+        self.config.save()
+        
+        # Create message box
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle("Server Restarted")
+        msg_box.setText(
+            "The server has been restarted and your session is no longer valid.\n\n"
+            "You need to log out and log in again with the new credentials."
+        )
+        msg_box.setInformativeText("Would you like to log out now?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        
+        # Show dialog
+        result = msg_box.exec()
+        
+        if result == QMessageBox.StandardButton.Yes:
+            # Trigger logout
+            self.handle_logout()
+        else:
+            # Just show a reminder
+            self.status_bar.showMessage("Remember to log out and log in with new credentials", 10000)
+
     @async_callback
     async def logout_api(self):
         """Log out from API"""

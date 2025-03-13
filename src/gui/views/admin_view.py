@@ -12,6 +12,8 @@ from api.client import APIClient
 from api.models import APIError
 from utils.async_utils import async_callback
 
+from gui.widgets.server_status import ServerStatusWidget
+from gui.widgets.session_manager import SessionManagerWidget
 
 class InviteDialog(QDialog):
     """Dialog to display generated invite code"""
@@ -553,7 +555,12 @@ class AdminView(QWidget):
         self.setup_invite_management_tab(invite_management_tab)
         self.tab_widget.addTab(invite_management_tab, "Invite Management")
         
-        # System Information tab (placeholder for future implementation)
+        # Session Management tab
+        session_management_tab = QWidget()
+        self.setup_session_management_tab(session_management_tab)
+        self.tab_widget.addTab(session_management_tab, "Session Management")
+        
+        # System Information tab
         system_tab = QWidget()
         self.setup_system_tab(system_tab)
         self.tab_widget.addTab(system_tab, "System Information")
@@ -625,26 +632,57 @@ class AdminView(QWidget):
         # Initial refresh of invite codes
         self.refresh_invite_codes()
     
+    def setup_session_management_tab(self, tab):
+        """Set up the session management tab"""
+        layout = QVBoxLayout(tab)
+        
+        # Session management widget
+        self.session_manager = SessionManagerWidget(self.api_client)
+        layout.addWidget(self.session_manager)
+        
+        # Add stretch to push everything to the top
+        layout.addStretch()
+
     def setup_system_tab(self, tab):
         """Set up the system information tab"""
         layout = QVBoxLayout(tab)
         
-        # System information section
-        system_group = QGroupBox("System Information")
-        system_layout = QVBoxLayout(system_group)
+        # Add server status widget
+        self.server_status = ServerStatusWidget(self.api_client)
+        layout.addWidget(self.server_status)
         
-        system_info = QLabel(
-            "System information will be available in a future update.\n\n"
+        # Database statistics section (placeholder for future implementation)
+        database_group = QGroupBox("Database Statistics")
+        database_layout = QVBoxLayout(database_group)
+        
+        database_info = QLabel(
+            "Database statistics will be available in a future update.\n\n"
             "Planned features:\n"
-            "- Server status monitoring\n"
-            "- Database statistics\n"
-            "- Active sessions\n"
-            "- System logs"
+            "- Total entries count\n"
+            "- Database size\n"
+            "- Entries per user\n"
+            "- Growth statistics"
         )
-        system_info.setWordWrap(True)
-        system_layout.addWidget(system_info)
+        database_info.setWordWrap(True)
+        database_layout.addWidget(database_info)
         
-        layout.addWidget(system_group)
+        layout.addWidget(database_group)
+        
+        # System logs section (placeholder for future implementation)
+        logs_group = QGroupBox("System Logs")
+        logs_layout = QVBoxLayout(logs_group)
+        
+        logs_info = QLabel(
+            "System logs will be available in a future update.\n\n"
+            "Planned features:\n"
+            "- View application logs\n"
+            "- Log rotation settings\n"
+            "- Log level filtering"
+        )
+        logs_info.setWordWrap(True)
+        logs_layout.addWidget(logs_info)
+        
+        layout.addWidget(logs_group)
         
         # Add stretch to push everything to the top
         layout.addStretch()
