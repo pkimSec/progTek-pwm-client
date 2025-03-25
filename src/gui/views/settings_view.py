@@ -117,7 +117,7 @@ class SettingsView(QWidget):
         
         about_label = QLabel(
             "<h2>progTek-pwm-Client</h2>"
-            "<p>Version 0.1.0</p>"
+            "<p>Version 1.0.0</p>"
             "<p>Open source password manager with end-to-end encryption.</p>"
             "<p>License: GNU General Public License v3.0</p>"
             "<p><a href='https://github.com/pkimSec/progTek-pwm-Client'>GitHub Repository</a></p>"

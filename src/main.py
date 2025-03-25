@@ -214,7 +214,24 @@ class PasswordManagerApp(QObject):
         # If dialog was rejected and we're not registering, exit
         if result == QDialog.DialogCode.Rejected and not self.is_registering:
             print("Login dialog rejected, exiting application")
-            self.qapp.quit()
+            # Make sure to clean up all sessions before exiting
+            self.cleanup_and_exit()
+
+    def cleanup_and_exit(self):
+        """Properly clean up all resources and exit the application"""
+        print("Performing cleanup before exit")
+        
+        # First, clear all session data
+        self.clear_session_data()
+        
+        # Add a small delay to ensure asynchronous cleanup tasks have time to complete
+        QTimer.singleShot(100, self.force_exit)
+
+    def force_exit(self):
+        """Force the application to exit after cleanup"""
+        print("Forcing application exit")
+        # This will ensure the application exits even if there are pending operations
+        self.qapp.exit(0)
     
     def show_register_dialog(self):
         """Show registration dialog"""
@@ -309,9 +326,15 @@ class PasswordManagerApp(QObject):
                 print(f"Error closing existing window: {str(e)}")
             self.main_window = None
 
-        # Create API client with token
-        print("Creating new API client with fresh token")
-        self.api_client = APIClient(self.config.api_base_url)
+        # IMPORTANT: Instead of creating new API client, update the existing one
+        # This prevents creating multiple sessions
+        print("Updating existing API client with new token")
+        if not self.api_client:
+            # Only create a new API client if one doesn't exist
+            print("Creating new API client (none existed)")
+            self.api_client = APIClient(self.config.api_base_url)
+        
+        # Update the token and other credentials
         self.api_client._access_token = response.access_token
         self.api_client._session_token = getattr(response, 'session_token', None)
         
@@ -394,6 +417,10 @@ class PasswordManagerApp(QObject):
             # If we now have an API client, try to fetch salt
             if self.api_client:
                 try:
+                    # Ensure the API client has a session before attempting to get salt
+                    await self.api_client.ensure_session()
+                    
+                    # Now get the salt
                     salt = await self.api_client.get_vault_salt()
                     
                     if salt:
@@ -408,9 +435,13 @@ class PasswordManagerApp(QObject):
                         print("Warning: Could not retrieve vault salt")
                 except Exception as e:
                     print(f"Error getting salt: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                     # Continue without salt - the main window will try again
         except TypeError as e:
             print(f"Type error fetching vault salt: {str(e)}")
+            import traceback
+            traceback.print_exc()
             # Continue despite the error
         except Exception as e:
             print(f"Error fetching vault salt: {str(e)}")

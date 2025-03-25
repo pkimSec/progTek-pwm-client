@@ -59,9 +59,33 @@ class APIClient:
     async def ensure_session(self):
         """Ensure its a valid session"""
         print(f"Ensuring session for {self.endpoints.base_url}")
+        
+        # Check if we already have this exact session in _active_sessions
+        if hasattr(self, 'session') and self.session:
+            for session_ref in list(_active_sessions):
+                session = session_ref()
+                if session is self.session:
+                    if not session.closed:
+                        print("Session already exists in active sessions and is open")
+                        return
+                    else:
+                        print("Session exists in active sessions but is closed")
+                        # Will create a new one below
+                        break
+        
+        # Only create a new session if we don't have one or the existing one is closed
         if self.session is None or self.session.closed:
             print("Session is None or closed, creating new session")
             try:
+                # If we already have a session, make sure to close it first
+                if self.session is not None and not self.session.closed:
+                    try:
+                        print(f"Closing existing session before creating a new one")
+                        await self.session.close()
+                    except Exception as e:
+                        print(f"Error closing existing session: {str(e)}")
+                
+                # Now create a fresh session
                 timeout = aiohttp.ClientTimeout(total=30)
                 self.session = aiohttp.ClientSession(timeout=timeout)
             
@@ -655,7 +679,14 @@ class APIClient:
         Fetches salt from server and caches it for future use.
         """
         try:
+            # Make sure we have a valid session before proceeding
+            await self.ensure_session()
+            
+            # Make the API request
+            print("Requesting vault salt from server")
             response = await self._request('GET', self.endpoints.vault_salt)
+            
+            # Extract salt from response
             salt = response.get('salt')
             if not salt:
                 print("Warning: Server returned empty salt")
@@ -671,7 +702,7 @@ class APIClient:
                 print("Warning: Cannot store salt in user session")
             
             # Try to unlock vault if we have a master password
-            if self._master_password:
+            if hasattr(self, '_master_password') and self._master_password:
                 from crypto.vault import get_vault
                 vault = get_vault()
                 if vault.unlock(self._master_password, salt):
