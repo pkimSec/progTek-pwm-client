@@ -22,13 +22,18 @@ class PasswordManagerApp(QObject):
         """Initialize application"""
         # Create Qt application
         self.qapp = QApplication(sys.argv)
-        self.qapp.setApplicationName("Password Manager")
+        self.qapp.setApplicationName("progTek-pwm")
         
         # Initialize QObject after QApplication exists
         super().__init__()
         
         # Load configuration
         self.config = AppConfig.load()
+
+        # Apply theme
+        from utils.theme import apply_theme, create_theme_assets
+        create_theme_assets()  # Create missing icons if needed
+        apply_theme(self.config.theme)
         
         # Initialize variables
         self.main_window = None

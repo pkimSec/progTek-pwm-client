@@ -139,7 +139,12 @@ class SettingsView(QWidget):
     
     def on_theme_changed(self, theme_name):
         """Handle theme change"""
+        # Update config
         self.config.theme = theme_name.lower()
+        
+        # Apply theme
+        from utils.theme import apply_theme
+        apply_theme(theme_name.lower())
     
     def on_timeout_changed(self, value):
         """Handle session timeout change"""
