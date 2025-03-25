@@ -84,16 +84,9 @@ class EntryList(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header with add button and sorting options
+        # Header without add button
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # New entry button
-        self.add_btn = QPushButton("+")
-        self.add_btn.setToolTip("Add Entry")
-        self.add_btn.setMaximumWidth(24)
-        self.add_btn.clicked.connect(self.new_entry_requested.emit)
-        header_layout.addWidget(self.add_btn)
         
         # Category label
         self.category_label = QLabel("All Items")
@@ -117,13 +110,7 @@ class EntryList(QWidget):
         header_layout.addWidget(self.sort_order_btn)
         
         layout.addLayout(header_layout)
-        
-        # Search box
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search entries...")
-        self.search_box.textChanged.connect(self.filter_entries)
-        layout.addWidget(self.search_box)
-        
+
         # Separator line
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
@@ -144,18 +131,19 @@ class EntryList(QWidget):
         self.list.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.list)
         
-        # Empty state message
-        self.empty_label = QLabel("No entries found")
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: gray; margin: 20px;")
-        layout.addWidget(self.empty_label)
-        self.empty_label.hide()
+        # Add button at bottom
+        bottom_layout = QHBoxLayout()
+        self.add_btn = QPushButton("+ Add Entry")
+        self.add_btn.setToolTip("Add Entry")
+        self.add_btn.clicked.connect(self.new_entry_requested.emit)
+        bottom_layout.addWidget(self.add_btn)
+        layout.addLayout(bottom_layout)
         
-        # Status message
+        # Status label (kept for internal use but not displayed)
         self.status_label = QLabel("Loading entries...")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("color: gray; font-style: italic;")
-        layout.addWidget(self.status_label)
+        self.status_label.setVisible(False)  # Hidden by default
     
     def load_entries_sync(self):
         """Synchronous wrapper for load_entries that doesn't require await"""
@@ -373,7 +361,6 @@ class EntryList(QWidget):
             if len(self.entries) > 0:
                 print(f"Making list visible with {len(self.entries)} entries")
                 self.list.setVisible(True)
-                self.empty_label.setVisible(False)
                 self.status_label.setVisible(False)
                 
                 # Force a layout update
@@ -384,10 +371,8 @@ class EntryList(QWidget):
                     self.count_label.setText(f"{len(self.entries)} entries")
                     self.count_label.setVisible(True)
             else:
-                self.status_label.setText("No entries found")
-                self.status_label.setVisible(True)
-                self.list.setVisible(False)
-            
+                self.list.setVisible(True)  # Always keep list visible
+                
             # Apply filters in a reliable manner
             self.apply_filters(force_visibility=True)
             
@@ -456,7 +441,7 @@ class EntryList(QWidget):
         """Delete an entry"""
         if not hasattr(item, 'entry_id'):
             return
-            
+                
         # Confirm deletion
         reply = QMessageBox.question(
             self, "Delete Entry",
@@ -467,25 +452,16 @@ class EntryList(QWidget):
         
         if reply != QMessageBox.StandardButton.Yes:
             return
-            
+                
         try:
             # Call API to delete entry
             await self.api_client.delete_entry(item.entry_id)
             
-            # Remove from local data
-            if item.entry_id in self.entries:
-                del self.entries[item.entry_id]
+            # Remove from local data and UI
+            self.remove_entry(item.entry_id)
             
-            # Remove from list
-            self.list.takeItem(self.list.row(item))
-            
-            # Update entry count
+            # Update count
             self.update_count()
-            
-            # Check if list is now empty
-            if self.list.count() == 0:
-                self.empty_label.show()
-                self.list.hide()
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete entry: {str(e)}")
@@ -568,15 +544,6 @@ class EntryList(QWidget):
             
             # Update count and visibility
             self.update_count()
-            
-            # Refresh display if needed
-            if self.list.count() > 0:
-                self.list.setVisible(True)
-                self.empty_label.setVisible(False)
-            else:
-                self.list.setVisible(False)
-                self.empty_label.setText("No entries found")
-                self.empty_label.setVisible(True)
         else:
             print(f"Entry {entry_id} not found in entries dictionary")
     
@@ -677,21 +644,8 @@ class EntryList(QWidget):
         
         print(f"Filter applied: {visible_count} of {len(self.entries)} entries visible")
         
-        # Show/hide empty state based on actual item count, not filter results
-        if self.list.count() > 0:
-            # We have items, just maybe none visible after filtering
-            if visible_count == 0:
-                self.empty_label.setText("No matching entries found")
-                self.empty_label.setVisible(True)
-                self.list.setVisible(False)
-            else:
-                self.empty_label.setVisible(False)
-                self.list.setVisible(True)
-        else:
-            # No items at all
-            self.empty_label.setText("No entries found")
-            self.empty_label.setVisible(True)
-            self.list.setVisible(False)
+        # Update count and ensure list stays visible
+        self.list.setVisible(True)  # Always keep list visible
         
         # Apply sort
         self.apply_sort()
@@ -912,12 +866,11 @@ class EntryList(QWidget):
             print(f"Making list visible with {total_count} entries")
             self.count_label.setVisible(True)
             self.list.setVisible(True)
-            self.empty_label.setVisible(False)
-            self.status_label.setVisible(False)
+            # No more empty_label to hide
         else:
             print("No entries to display")
-            self.empty_label.setVisible(True)
-            self.list.setVisible(False)
+            # Always keep list visible, even when empty
+            self.list.setVisible(True)
 
     def force_display_refresh(self):
         """Force a refresh of the display"""
@@ -926,7 +879,6 @@ class EntryList(QWidget):
         try:
             # Make sure the list is visible
             self.list.setVisible(True)
-            self.empty_label.setVisible(False)
             self.status_label.setVisible(False)
             
             # Make sure all items are visible (unless filtered)

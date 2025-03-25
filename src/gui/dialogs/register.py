@@ -28,7 +28,7 @@ class RegisterDialog(BaseDialog):
     
     def setup_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("Password Manager - Register")
+        self.setWindowTitle("progTek-pwm")
         self.setMinimumWidth(450)
         
         # Main layout

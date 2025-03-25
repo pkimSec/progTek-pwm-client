@@ -31,7 +31,7 @@ class LoginDialog(BaseDialog):
         
     def setup_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("Password Manager - Login")
+        self.setWindowTitle("progTek-pwm")
         self.setMinimumWidth(400)
         
         # Main layout

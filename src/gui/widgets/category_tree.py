@@ -32,7 +32,7 @@ class CategoryTree(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header with title and add button
+        # Header with title only, no add button
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -40,21 +40,7 @@ class CategoryTree(QWidget):
         title.setStyleSheet("font-weight: bold;")
         header_layout.addWidget(title)
         
-        header_layout.addStretch()
-        
-        self.add_btn = QPushButton("+")
-        self.add_btn.setToolTip("Add Category")
-        self.add_btn.setMaximumWidth(24)
-        self.add_btn.clicked.connect(self.add_category)
-        header_layout.addWidget(self.add_btn)
-        
         layout.addLayout(header_layout)
-        
-        # Search box
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search categories...")
-        self.search_box.textChanged.connect(self.filter_categories)
-        layout.addWidget(self.search_box)
         
         # Separator line
         line = QFrame()
@@ -73,11 +59,13 @@ class CategoryTree(QWidget):
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.tree)
         
-        # Status label
-        self.status_label = QLabel("Loading categories...")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: gray; font-style: italic;")
-        layout.addWidget(self.status_label)
+        # Add button at bottom
+        bottom_layout = QHBoxLayout()
+        self.add_btn = QPushButton("+ Add Category")
+        self.add_btn.setToolTip("Add Category")
+        self.add_btn.clicked.connect(self.add_category)
+        bottom_layout.addWidget(self.add_btn)
+        layout.addLayout(bottom_layout)
     
     @async_callback
     async def load_categories(self):
@@ -88,15 +76,6 @@ class CategoryTree(QWidget):
             if not tree:
                 print("Tree widget not available, aborting load")
                 return
-                
-            status_label = self.status_label if hasattr(self, 'status_label') else None
-            if status_label:
-                try:
-                    status_label.setText("Loading categories...")
-                    status_label.setVisible(True)
-                except RuntimeError:
-                    print("Status label no longer available")
-                    # Continue without updating the label
             
             # Clear existing items
             tree.clear()
@@ -145,21 +124,9 @@ class CategoryTree(QWidget):
             tree.setCurrentItem(all_items)
             self.category_selected.emit("All Items", None)
             
-            # Update status
-            if status_label:
-                try:
-                    if len(categories) == 0:
-                        status_label.setText("No categories found")
-                    else:
-                        status_label.setVisible(False)
-                except RuntimeError:
-                    print("Status label no longer available")
-            
         except APIError as e:
             print(f"API Error loading categories: {e.message}")
             try:
-                if hasattr(self, 'status_label'):
-                    self.status_label.setText(f"Error: {e.message}")
                 QMessageBox.critical(self, "Error", f"Failed to load categories: {e.message}")
             except RuntimeError:
                 print("Widget no longer available for error display")
@@ -170,8 +137,6 @@ class CategoryTree(QWidget):
             print(f"Error loading categories: {str(e)}")
             
             try:
-                if hasattr(self, 'status_label'):
-                    self.status_label.setText("Error loading categories")
                 QMessageBox.critical(self, "Error", f"Failed to load categories: {str(e)}")
             except RuntimeError:
                 print("Widget no longer available for error display")

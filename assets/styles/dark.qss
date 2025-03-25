@@ -674,3 +674,24 @@ QScrollArea > QWidget > QWidget {
 #EntryForm {
     padding: 5px;
 }
+
+QPushButton[text="+ Add Category"], QPushButton[text="+ Add Entry"] {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 8px 16px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+    font-weight: 500;
+    text-align: left;
+}
+
+QPushButton[text="+ Add Category"]:hover, QPushButton[text="+ Add Entry"]:hover {
+    background-color: #45475a;
+    border: 1px solid #585b70;
+}
+
+QPushButton[text="+ Add Category"]:pressed, QPushButton[text="+ Add Entry"]:pressed {
+    background-color: #585b70;
+}

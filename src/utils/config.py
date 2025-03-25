@@ -13,7 +13,7 @@ class AppConfig:
     api_timeout: int = 30
     
     # UI Configuration
-    theme: str = "dark"
+    theme: str = "dark"  # Default is now explicitly dark
     window_width: int = 1200
     window_height: int = 800
     

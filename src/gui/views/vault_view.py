@@ -493,7 +493,12 @@ class VaultView(QWidget):
 
     def on_global_search(self, search_text: str):
         """Handle global search"""
+        # Filter entries using the search text
         self.entry_list.filter_entries(search_text)
+        
+        # Also filter categories with the same text if needed
+        if hasattr(self, 'category_tree') and hasattr(self.category_tree, 'filter_categories'):
+            self.category_tree.filter_categories(search_text)
     
     def refresh_data(self):
         """Refresh all data - synchronous wrapper"""

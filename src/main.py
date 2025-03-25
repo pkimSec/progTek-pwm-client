@@ -56,7 +56,7 @@ class PasswordManagerApp(QObject):
         
         # Check for existing session
         config_dir = Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config')
-        config_dir = config_dir / 'password_manager'
+        config_dir = config_dir / 'progtek_pwm'
         
         # Try to load existing session
         user_session = UserSession.load(config_dir)
@@ -96,7 +96,7 @@ class PasswordManagerApp(QObject):
     def clear_session_data(self):
         """Clear all session data"""
         config_dir = Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config')
-        config_dir = config_dir / 'password_manager'
+        config_dir = config_dir / 'progtek_pwm'
         
         # Clear session file
         UserSession.clear(config_dir)
