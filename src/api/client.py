@@ -24,8 +24,37 @@ class APIClient:
     # Class variable for session cache
     _instance_cache: ClassVar[Dict[str, 'APIClient']] = {}
     
+    def __new__(cls, base_url: str):
+        """
+        Override __new__ to implement the singleton pattern per base_url.
+        This ensures that only one instance is created per base URL.
+        """
+        # Normalize the base URL to avoid duplicates due to trailing slashes
+        base_url = base_url.rstrip('/')
+        
+        # Check if an instance already exists for this base URL
+        if base_url in cls._instance_cache:
+            print(f"Returning existing APIClient instance for {base_url}")
+            return cls._instance_cache[base_url]
+        
+        # Create a new instance if none exists
+        instance = super().__new__(cls)
+        cls._instance_cache[base_url] = instance
+        
+        # Store base_url in the instance for use in __init__
+        instance._base_url = base_url
+        
+        return instance
+
     def __init__(self, base_url: str):
         """Initialize API client with base URL"""
+        # Normalize the base URL
+        base_url = base_url.rstrip('/')
+        
+        # Check if this instance has already been initialized
+        if hasattr(self, 'initialized') and self.initialized and hasattr(self, '_base_url') and self._base_url == base_url:
+            return
+
         self.endpoints = APIEndpoints(base_url)
         self.session: Optional[aiohttp.ClientSession] = None
         self._access_token: Optional[str] = None
@@ -37,8 +66,10 @@ class APIClient:
         self._user_email: Optional[str] = None  # Store user email for reconnection
         self._is_closing = False  # Flag to prevent multiple close attempts
         self._auth_retry_count = 0
-        
-        # Cache this instance by base_url for reuse
+
+        # Mark as initialized
+        self.initialized = True
+
         APIClient._instance_cache[base_url] = self
         
         print(f"Created new APIClient for {base_url}")
@@ -672,7 +703,6 @@ class APIClient:
         
         return response
 
-    @async_callback
     async def get_vault_salt(self):
         """
         Get vault salt for key derivation.

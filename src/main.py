@@ -420,24 +420,29 @@ class PasswordManagerApp(QObject):
                     # Ensure the API client has a session before attempting to get salt
                     await self.api_client.ensure_session()
                     
-                    # Now get the salt
-                    salt = await self.api_client.get_vault_salt()
-                    
-                    if salt:
-                        print(f"Successfully retrieved vault salt: {salt[:10]}...")
-                        self.user_session.set_vault_salt(salt)
-                        self.user_session.save(Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config') / 'password_manager')
+                    # Now get the salt - DIRECT CALL (don't use async_callback here)
+                    try:
+                        salt = await self.api_client.get_vault_salt()
                         
-                        # Now set the master password to unlock the vault
-                        if hasattr(self.api_client, '_master_password') and self.api_client._master_password:
-                            self.api_client.set_master_password(self.api_client._master_password)
-                    else:
-                        print("Warning: Could not retrieve vault salt")
+                        if salt:
+                            print(f"Successfully retrieved vault salt: {salt[:10]}...")
+                            self.user_session.set_vault_salt(salt)
+                            self.user_session.save(Path(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME') or Path.home() / '.config') / 'password_manager')
+                            
+                            # Now set the master password to unlock the vault
+                            if hasattr(self.api_client, '_master_password') and self.api_client._master_password:
+                                self.api_client.set_master_password(self.api_client._master_password)
+                        else:
+                            print("Warning: Could not retrieve vault salt")
+                    except Exception as e:
+                        print(f"Error getting salt: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        # Continue without salt - the main window will try again
                 except Exception as e:
-                    print(f"Error getting salt: {str(e)}")
+                    print(f"Error ensuring session: {str(e)}")
                     import traceback
                     traceback.print_exc()
-                    # Continue without salt - the main window will try again
         except TypeError as e:
             print(f"Type error fetching vault salt: {str(e)}")
             import traceback
