@@ -326,9 +326,15 @@ class PasswordManagerApp(QObject):
                 print(f"Error closing existing window: {str(e)}")
             self.main_window = None
 
-        # Create API client with token
-        print("Creating new API client with fresh token")
-        self.api_client = APIClient(self.config.api_base_url)
+        # IMPORTANT: Instead of creating new API client, update the existing one
+        # This prevents creating multiple sessions
+        print("Updating existing API client with new token")
+        if not self.api_client:
+            # Only create a new API client if one doesn't exist
+            print("Creating new API client (none existed)")
+            self.api_client = APIClient(self.config.api_base_url)
+        
+        # Update the token and other credentials
         self.api_client._access_token = response.access_token
         self.api_client._session_token = getattr(response, 'session_token', None)
         
@@ -411,6 +417,10 @@ class PasswordManagerApp(QObject):
             # If we now have an API client, try to fetch salt
             if self.api_client:
                 try:
+                    # Ensure the API client has a session before attempting to get salt
+                    await self.api_client.ensure_session()
+                    
+                    # Now get the salt
                     salt = await self.api_client.get_vault_salt()
                     
                     if salt:
@@ -425,9 +435,13 @@ class PasswordManagerApp(QObject):
                         print("Warning: Could not retrieve vault salt")
                 except Exception as e:
                     print(f"Error getting salt: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                     # Continue without salt - the main window will try again
         except TypeError as e:
             print(f"Type error fetching vault salt: {str(e)}")
+            import traceback
+            traceback.print_exc()
             # Continue despite the error
         except Exception as e:
             print(f"Error fetching vault salt: {str(e)}")

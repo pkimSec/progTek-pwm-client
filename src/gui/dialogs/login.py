@@ -198,8 +198,11 @@ class LoginDialog(BaseDialog):
                 return
             
         print(f"Testing connection to: {server_url}")
-        # Update client with new URL
-        self.api_client = APIClient(server_url)
+
+        # IMPORTANT: Reuse the existing client with the same URL instead of creating a new one
+        if self.api_client.endpoints.base_url != server_url:
+            # URL changed, use a fresh client
+            self.api_client = APIClient(server_url)
         
         try:
             self.show_loading(True)
@@ -207,7 +210,7 @@ class LoginDialog(BaseDialog):
             self.status_label.setStyleSheet("color: orange")
             
             print("Creating API session...")
-            await self.api_client.create_session()
+            await self.api_client.ensure_session()
             
             print("Sending ping request...")
             # Use the new ping endpoint instead of trying to login
