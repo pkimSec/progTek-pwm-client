@@ -138,12 +138,6 @@ class EntryList(QWidget):
         self.add_btn.clicked.connect(self.new_entry_requested.emit)
         bottom_layout.addWidget(self.add_btn)
         layout.addLayout(bottom_layout)
-        
-        # Status label (kept for internal use but not displayed)
-        self.status_label = QLabel("Loading entries...")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: gray; font-style: italic;")
-        self.status_label.setVisible(False)  # Hidden by default
     
     def load_entries_sync(self):
         """Synchronous wrapper for load_entries that doesn't require await"""
@@ -170,8 +164,6 @@ class EntryList(QWidget):
     async def load_entries(self):
         """Load all password entries from server"""
         try:
-            self.status_label.setText("Loading entries...")
-            self.status_label.setVisible(True)
             self.list.setVisible(False)
             
             # Ensure we have an API client
@@ -657,11 +649,7 @@ class EntryList(QWidget):
         """Completely reload all entries from scratch"""
         print("Performing complete entry reload")
         
-        try:
-            # Show loading indicator
-            self.status_label.setText("Loading entries...")
-            self.status_label.setVisible(True)
-            
+        try: 
             # Cancel any ongoing operations
             if hasattr(self, '_reload_task') and self._reload_task:
                 print("Cancelling previous reload task")
