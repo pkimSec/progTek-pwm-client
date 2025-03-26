@@ -48,12 +48,12 @@ class SettingsView(QWidget):
         security_group = QGroupBox("Security")
         security_layout = QFormLayout(security_group)
         
-        self.session_timeout = QSpinBox()
-        self.session_timeout.setRange(1, 120)
-        self.session_timeout.setValue(self.config.session_timeout)
-        self.session_timeout.setSuffix(" minutes")
-        self.session_timeout.valueChanged.connect(self.on_timeout_changed)
-        security_layout.addRow("Session Timeout:", self.session_timeout)
+        #self.session_timeout = QSpinBox()
+        #self.session_timeout.setRange(1, 120)
+        #self.session_timeout.setValue(self.config.session_timeout)
+        #self.session_timeout.setSuffix(" minutes")
+        #self.session_timeout.valueChanged.connect(self.on_timeout_changed)
+        #security_layout.addRow("Session Timeout:", self.session_timeout)
         
         self.auto_lock = QCheckBox("Lock vault on system idle")
         self.auto_lock.setChecked(True)

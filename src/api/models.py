@@ -10,6 +10,7 @@ class LoginResponse(BaseModel):
     access_token: str
     role: str
     user_id: int
+    session_token: Optional[str] = None
 
 class RegisterRequest(BaseModel):
     """Request model for user registration"""
